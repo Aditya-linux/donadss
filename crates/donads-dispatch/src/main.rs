@@ -21,7 +21,7 @@ use bot_operator::{
     OperatorTransitionError, OperatorWorkflow, apply_action as apply_operator_action,
 };
 use bot_scout::Scout;
-use bot_sentinel::Sentinel;
+use bot_sentinel::{NativeTransferPolicyRequest, Sentinel, SentinelPolicyGuard};
 use donads_core::{
     Bot, BotDescriptor, ChainClient, Network, Task, TaskEvent, TaskFeedback, TaskInput, TaskStatus,
 };
@@ -947,6 +947,14 @@ async fn flow_action(
     Path(id): Path<Uuid>,
     Json(action): Json<WorkflowAction>,
 ) -> Result<Json<FlowActionResponse>, ApiError> {
+    if matches!(&action, WorkflowAction::Approve { .. }) {
+        let workflow = state
+            .tasks
+            .flow_workflow(id)
+            .await
+            .map_err(flow_api_error)?;
+        sentinel_check_flow(&workflow)?;
+    }
     state
         .tasks
         .apply_flow_action(id, action)
@@ -976,6 +984,7 @@ async fn confirm_flow_transaction(
         .flow_workflow(id)
         .await
         .map_err(flow_api_error)?;
+    sentinel_check_flow(&workflow)?;
     let payout = workflow
         .payouts
         .first()
@@ -1021,6 +1030,25 @@ async fn confirm_flow_transaction(
         .await
         .map(Json)
         .map_err(flow_api_error)
+}
+
+fn sentinel_check_flow(workflow: &PaymentWorkflow) -> Result<(), ApiError> {
+    let payout = workflow
+        .payouts
+        .first()
+        .ok_or_else(|| ApiError::bad_request("Flow intent has no transfer"))?;
+    let amount = mon_amount_to_wei(&payout.amount)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    SentinelPolicyGuard::validate_native_transfer(&NativeTransferPolicyRequest {
+        chain_id: workflow.chain_id,
+        sender: workflow.payer.clone(),
+        recipient: payout.recipient_address.clone(),
+        asset: payout.asset.clone(),
+        approved_amount_wei: amount,
+        requested_amount_wei: amount,
+    })
+    .map(|_| ())
+    .map_err(|error| ApiError::bad_request(error.to_string()))
 }
 
 async fn commerce_action(

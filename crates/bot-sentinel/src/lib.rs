@@ -2,12 +2,73 @@
 
 use async_trait::async_trait;
 use donads_core::{Bot, BotDescriptor, BotError, BotResult, Task};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Read-only threat scanner used by the first DONADS milestone.
 #[derive(Default)]
 pub struct Sentinel;
+
+/// Exact transfer facts checked before Flow may authorize or record execution.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NativeTransferPolicyRequest {
+    pub chain_id: u64,
+    pub sender: String,
+    pub recipient: String,
+    pub asset: String,
+    pub approved_amount_wei: u128,
+    pub requested_amount_wei: u128,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PolicyDecision {
+    pub allowed: bool,
+    pub checks: Vec<&'static str>,
+}
+
+/// Mandatory deterministic policy gate for the first native-MON execution path.
+pub struct SentinelPolicyGuard;
+
+impl SentinelPolicyGuard {
+    pub fn validate_native_transfer(
+        request: &NativeTransferPolicyRequest,
+    ) -> Result<PolicyDecision, BotError> {
+        if request.chain_id != 10_143 {
+            return Err(BotError::InvalidInput(
+                "Sentinel rejected execution outside Monad Testnet".into(),
+            ));
+        }
+        validate_address(&request.sender, "sender")?;
+        validate_address(&request.recipient, "recipient")?;
+        if request.sender.eq_ignore_ascii_case(&request.recipient) {
+            return Err(BotError::InvalidInput(
+                "Sentinel rejected a self-transfer".into(),
+            ));
+        }
+        if !request.asset.eq_ignore_ascii_case("MON") {
+            return Err(BotError::InvalidInput(
+                "Sentinel permits native MON only in the first execution path".into(),
+            ));
+        }
+        if request.requested_amount_wei == 0
+            || request.requested_amount_wei != request.approved_amount_wei
+        {
+            return Err(BotError::InvalidInput(
+                "Sentinel rejected an amount that differs from the approved intent".into(),
+            ));
+        }
+        Ok(PolicyDecision {
+            allowed: true,
+            checks: vec![
+                "monad_testnet",
+                "valid_sender",
+                "valid_recipient",
+                "native_mon",
+                "exact_approved_amount",
+            ],
+        })
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct Finding {
@@ -130,12 +191,24 @@ fn find_executable_opcode(bytecode: &[u8], target: u8) -> Option<usize> {
     None
 }
 
+fn validate_address(address: &str, label: &str) -> Result<(), BotError> {
+    let bytes = address.strip_prefix("0x").ok_or_else(|| {
+        BotError::InvalidInput(format!("Sentinel requires a 0x-prefixed {label} address"))
+    })?;
+    if bytes.len() != 40 || !bytes.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(BotError::InvalidInput(format!(
+            "Sentinel requires a 20-byte hexadecimal {label} address"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use donads_core::{Bot, Task, TaskInput};
     use serde_json::json;
 
-    use super::Sentinel;
+    use super::{NativeTransferPolicyRequest, Sentinel, SentinelPolicyGuard};
 
     #[tokio::test]
     async fn reports_selfdestruct() {
@@ -201,5 +274,21 @@ mod tests {
             .await
             .expect("analysis should succeed");
         assert_eq!(result.data["threat_score"], 0);
+    }
+
+    #[test]
+    fn policy_guard_accepts_only_exact_testnet_mon_transfers() {
+        let request = NativeTransferPolicyRequest {
+            chain_id: 10_143,
+            sender: "0x1111111111111111111111111111111111111111".into(),
+            recipient: "0x2222222222222222222222222222222222222222".into(),
+            asset: "MON".into(),
+            approved_amount_wei: 1_000,
+            requested_amount_wei: 1_000,
+        };
+        assert!(SentinelPolicyGuard::validate_native_transfer(&request).is_ok());
+        let mut changed = request;
+        changed.requested_amount_wei = 999;
+        assert!(SentinelPolicyGuard::validate_native_transfer(&changed).is_err());
     }
 }

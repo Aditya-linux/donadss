@@ -17,7 +17,7 @@ The current repository can request a user-approved native MON transaction throug
 | Growth | Creates deterministic campaign drafts from a stored brand profile and cited evidence | LLM-backed drafting, Telegram/Gmail/X publishing with approval and verified message IDs |
 | Flow | Connects an injected wallet, enforces Monad Testnet, broadcasts an exact native MON transfer, and verifies its mined receipt server-side | Policy-vault enforcement, delegated KMS signer, ERC-20 transfers, replacement and recovery UI |
 | Operator | Validates dependency graphs, runs approved specialist steps, persists state, supports cancellation and retry | Sentinel pre-flight gate, durable production queue, real external-action recovery |
-| Sentinel | Scans EVM bytecode for `SELFDESTRUCT`, `DELEGATECALL`, and `CALLCODE` while respecting PUSH data | Clickable UI, runtime task policy, merchant/domain/address allowlists, prompt-injection defenses, mandatory pre-flight enforcement |
+| Sentinel | Provides clickable bytecode triage and mandatory Flow pre-flight checks for network, sender, recipient, asset, and exact amount | Merchant/domain allowlists, policy-vault state checks, prompt-injection defenses |
 
 The ten-bot target has not been reached. Six bots exist; four additional bots must be specified and approved before implementation.
 
@@ -67,7 +67,7 @@ See `.env.example`. Never commit seed phrases, private keys, browser session dat
 
 1. Execute and record the first funded native MON testnet acceptance transfer.
 2. Run `DonadsPolicyVault.sol` behavioral tests with Foundry, audit it, and deploy it to testnet.
-3. Make Sentinel the mandatory pre-flight gate for wallet and vault execution.
+3. Extend the mandatory Sentinel Flow gate with deployed policy-vault state and merchant-domain checks.
 4. Add recovery for delayed, dropped, replaced, and reverted transactions.
 5. Add ERC-20 transfer support with exact token/decimal validation.
 6. Integrate one authorized crypto-accepting test merchant.

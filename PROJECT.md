@@ -18,7 +18,7 @@ DONADS is a crypto-native agent execution system for Monad. It coordinates bound
 3. Growth — brand-constrained campaign drafts.
 4. Flow — wallet-approved native MON execution and RPC receipt verification.
 5. Operator — dependency-aware persistent orchestration.
-6. Sentinel — bytecode risk analysis; runtime policy enforcement is next.
+6. Sentinel — bytecode risk analysis plus mandatory native-MON Flow policy checks.
 
 The current interface contains six specialists. The former ten-chain-bot concept is retained only as historical product exploration; it is not the active implementation contract. Four future bot slots remain undefined until the user approves each bot.
 
@@ -30,7 +30,7 @@ Complete one native MON transfer on Monad Testnet from a connected user wallet, 
 
 1. Native MON wallet execution and receipt verification.
 2. Policy vault compilation, unit tests, audit, and testnet deployment.
-3. Mandatory Sentinel pre-flight policy middleware.
+3. Extend Sentinel with policy-vault state and merchant-domain checks.
 4. One authorized crypto-accepting merchant integration.
 5. Real merchant order receipt and recovery flow.
 6. ERC-20 support after token and decimal validation.

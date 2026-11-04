@@ -10,6 +10,7 @@ import {
   Workflow,
   ShieldCheck,
   Sparkles,
+  WalletCards,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -21,6 +22,11 @@ import { MascotMark } from "@/components/mascot";
 import { OperatorWorkspace } from "@/components/operator-workspace";
 import { ScoutWorkspace } from "@/components/scout-workspace";
 import { SentinelWorkspace } from "@/components/sentinel-workspace";
+import {
+  createAuthChallenge,
+  setAccessToken,
+  verifyWalletSignature,
+} from "@/lib/donads-api";
 
 type Agent = "scout" | "commerce" | "growth" | "flow" | "operator" | "sentinel";
 
@@ -110,12 +116,43 @@ export function ChatShell() {
   const [agent, setAgent] = useState<Agent>("scout");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceKey, setWorkspaceKey] = useState(0);
+  const [signedInWallet, setSignedInWallet] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const details = agentDetails[agent];
   const AgentIcon = details.icon;
 
   function selectAgent(next: Agent) {
     setAgent(next);
     setSidebarOpen(false);
+  }
+
+  async function signIn() {
+    const provider = window.ethereum;
+    if (!provider) {
+      setAuthError("Install an EVM wallet to sign in.");
+      return;
+    }
+    setSigningIn(true);
+    setAuthError(null);
+    try {
+      const accounts = (await provider.request({ method: "eth_requestAccounts" })) as string[];
+      const address = accounts[0];
+      if (!address) throw new Error("The wallet did not return an account.");
+      const challenge = await createAuthChallenge(address);
+      const signature = (await provider.request({
+        method: "personal_sign",
+        params: [challenge.message, address],
+      })) as string;
+      const session = await verifyWalletSignature(address, signature);
+      setAccessToken(session.access_token);
+      setSignedInWallet(session.owner_id);
+    } catch (error) {
+      setAccessToken(null);
+      setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed.");
+    } finally {
+      setSigningIn(false);
+    }
   }
 
   return (
@@ -125,8 +162,15 @@ export function ChatShell() {
         <header className="flex h-16 shrink-0 items-center border-b border-border px-3 sm:px-5">
           <button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)} className="mr-2 grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring lg:hidden"><Menu className="size-5" aria-hidden="true" /></button>
           <div className="flex min-h-10 items-center gap-2 px-2"><AgentIcon className="size-4" aria-hidden="true" /><span className="text-sm font-semibold">{details.name}</span></div>
-          <div className="ml-auto flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-primary" />{details.badge}</div>
+          <div className="ml-auto flex items-center gap-2">
+            <button type="button" onClick={signIn} disabled={signingIn} className="flex min-h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-muted disabled:opacity-60">
+              <WalletCards className="size-3.5" aria-hidden="true" />
+              {signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : signingIn ? "Signing in…" : "Sign in"}
+            </button>
+            <div className="hidden items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground sm:flex"><span className="size-1.5 rounded-full bg-primary" />{details.badge}</div>
+          </div>
         </header>
+        {authError ? <p role="alert" className="border-b border-border px-5 py-2 text-xs text-destructive">{authError}</p> : null}
         {agent === "scout" ? <ScoutWorkspace key={`scout-${workspaceKey}`} /> : null}
         {agent === "commerce" ? <CommerceWorkspace key={`commerce-${workspaceKey}`} /> : null}
         {agent === "growth" ? <GrowthWorkspace key={`growth-${workspaceKey}`} /> : null}

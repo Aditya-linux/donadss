@@ -1,4 +1,4 @@
-export type TaskEvent = {
+﻿export type TaskEvent = {
   sequence: number;
   kind: string;
   message: string;
@@ -214,6 +214,7 @@ export type OperatorWorkflow = {
 
 export type TaskBase = {
   id: string;
+  owner_id: string;
   prompt: string;
   bot: string;
   input: unknown;
@@ -341,6 +342,39 @@ function isFailedTask(task: Task): task is FailedTask {
 const API_URL =
   process.env.NEXT_PUBLIC_DONADS_API_URL ?? "http://127.0.0.1:8080";
 
+let accessToken: string | null = null;
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  return globalThis.fetch(input, { ...init, headers });
+}
+
+export async function createAuthChallenge(address: string): Promise<{ message: string }> {
+  const response = await globalThis.fetch(`${API_URL}/v1/auth/challenge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address }),
+  });
+  return readJson<{ message: string }>(response);
+}
+
+export async function verifyWalletSignature(
+  address: string,
+  signature: string,
+): Promise<{ access_token: string; owner_id: string; expires_at: string }> {
+  const response = await globalThis.fetch(`${API_URL}/v1/auth/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address, signature }),
+  });
+  return readJson(response);
+}
+
 export class ApiError extends Error {
   constructor(message: string) {
     super(message);
@@ -386,7 +420,7 @@ export async function createScoutTask(
   signal?: AbortSignal,
 ): Promise<Task> {
   const sources = extractSourceUrls(prompt);
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, bot: "scout", input: { sources } }),
@@ -399,7 +433,7 @@ export async function createSentinelTask(
   bytecode: string,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -425,7 +459,7 @@ export async function saveBrandProfile(
   profile: BrandProfile,
   signal?: AbortSignal,
 ): Promise<BrandProfile> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_URL}/v1/brand-profiles/${encodeURIComponent(profile.id)}`,
     {
       method: "PUT",
@@ -441,7 +475,7 @@ export async function getBrandProfile(
   id: string,
   signal?: AbortSignal,
 ): Promise<BrandProfile> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_URL}/v1/brand-profiles/${encodeURIComponent(id)}`,
     { signal },
   );
@@ -452,7 +486,7 @@ export async function createGrowthTask(
   input: GrowthTaskInput,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -478,7 +512,7 @@ export async function createFlowTask(
   input: FlowTaskInput,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: input.purpose, bot: "flow", input }),
@@ -498,7 +532,7 @@ export async function createCommerceTask(
   input: CommerceTaskInput,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: input.objective, bot: "commerce", input }),
@@ -516,7 +550,7 @@ export async function applyCommerceAction(
   action: CommerceAction,
   signal?: AbortSignal,
 ): Promise<CommerceCompletedTask> {
-  const response = await fetch(`${API_URL}/v1/tasks/${taskId}/commerce-actions`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/commerce-actions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
@@ -534,7 +568,7 @@ export async function applyFlowAction(
   action: FlowAction,
   signal?: AbortSignal,
 ): Promise<{ task: FlowCompletedTask; duplicate_prevented: boolean }> {
-  const response = await fetch(`${API_URL}/v1/tasks/${taskId}/flow-actions`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-actions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
@@ -550,7 +584,7 @@ export async function confirmFlowTransaction(
   transactionHash: string,
   signal?: AbortSignal,
 ): Promise<FlowCompletedTask> {
-  const response = await fetch(`${API_URL}/v1/tasks/${taskId}/flow-transaction`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-transaction`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ transaction_hash: transactionHash }),
@@ -588,7 +622,7 @@ export async function createOperatorTask(
   input: OperatorTaskInput,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: input.objective, bot: "operator", input }),
@@ -607,7 +641,7 @@ export async function applyOperatorAction(
   action: OperatorAction,
   signal?: AbortSignal,
 ): Promise<OperatorCompletedTask> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_URL}/v1/tasks/${taskId}/operator-actions`,
     {
       method: "POST",
@@ -624,7 +658,7 @@ export async function captureOperatorRoutine(
   input: { id: string; name: string; description: string },
   signal?: AbortSignal,
 ): Promise<OperatorRoutine> {
-  const response = await fetch(`${API_URL}/v1/tasks/${taskId}/routine`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/routine`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -636,7 +670,7 @@ export async function captureOperatorRoutine(
 export async function listOperatorRoutines(
   signal?: AbortSignal,
 ): Promise<OperatorRoutine[]> {
-  const response = await fetch(`${API_URL}/v1/routines`, { signal });
+  const response = await apiFetch(`${API_URL}/v1/routines`, { signal });
   return readJson<OperatorRoutine[]>(response);
 }
 
@@ -644,7 +678,7 @@ export async function runOperatorRoutine(
   routineId: string,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_URL}/v1/routines/${encodeURIComponent(routineId)}/runs`,
     { method: "POST", signal },
   );
@@ -687,7 +721,7 @@ export async function waitForOperator(
 }
 
 export async function getTask(id: string, signal?: AbortSignal): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks/${id}`, { signal });
+  const response = await apiFetch(`${API_URL}/v1/tasks/${id}`, { signal });
   return readJson<Task>(response);
 }
 
@@ -696,7 +730,7 @@ export async function submitTaskFeedback(
   rating: 1 | 5,
   signal?: AbortSignal,
 ): Promise<Task> {
-  const response = await fetch(`${API_URL}/v1/tasks/${id}/feedback`, {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${id}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rating }),

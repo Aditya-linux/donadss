@@ -129,6 +129,9 @@ impl ChainClient {
         transaction_hash: &str,
     ) -> Result<ConfirmedNativeTransfer, ChainError> {
         validate_transaction_hash(transaction_hash)?;
+        // Never trust transaction data until this exact RPC endpoint has proven
+        // that it is serving the configured Monad network.
+        self.status().await?;
         let transaction: Option<RpcTransaction> = self
             .rpc("eth_getTransactionByHash", json!([transaction_hash]))
             .await?;

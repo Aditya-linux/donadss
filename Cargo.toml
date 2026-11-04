@@ -21,10 +21,13 @@ anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
 hex = "0.4"
+k256 = { version = "0.13", features = ["ecdsa"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha3 = "0.10"
 thiserror = "2"
+time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"

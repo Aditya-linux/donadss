@@ -1,56 +1,79 @@
 # DONADS
 
-DONADS is a crypto-native agent system for Monad. It turns a user goal into bounded specialist tasks, requires exact authorization for sensitive actions, and reports only externally verifiable results.
+![DONADS mascot](frontend/public/brand/donads-mascot.jpeg)
 
-## Product rule
+**Decentralized On-chain Neural Agent Dispatch System** — a crypto-native agent workspace for Monad that turns a user goal into coordinated, permission-bounded work and reports completion only when the result can be verified.
 
-DONADS uses crypto only. The project contains no fiat payment provider, Razorpay integration, Cashfree integration, gift-card workaround, or simulated successful payment. A purchase can execute only when the merchant directly accepts the configured crypto asset or exposes an authorized crypto checkout API. Unsupported retailers must fail closed.
+## The problem
 
-The current repository can request a user-approved native MON transaction through an injected wallet and verify its mined receipt. It does **not** place merchant orders. Commerce remains an exact, approval-bound intent until an authorized crypto merchant is connected.
+General AI assistants can recommend actions, but recommendations are not completed tasks. Commerce, payments, research, campaigns, and long-running workflows need authenticated tools, durable state, explicit approval, recovery, and receipts. DONADS is building that execution layer without taking custody of a user's seed phrase or disguising a mock as a real result.
 
-## Current specialists
+## Product vision
 
-| Bot | Working now | Still missing |
+DONADS aims for a minimal, playful Grok Bot-style experience with the DONADS mascot, while being crypto-first and Monad-native. A user states a goal; Operator divides it into safe specialist steps, executes independent work in parallel, pauses at financial or external-write boundaries, and preserves the task history and evidence.
+
+The target platform includes persistent cloud workers, authenticated browsers, connected applications, cross-bot coordination, learned routines, and long-running background work. Those are target capabilities, not claims about the current build. No measured benchmark currently proves DONADS faster or better than Grok Bot.
+
+## Non-negotiable rules
+
+- Crypto only: no Razorpay, fiat checkout, KYC integration, or gift-card workaround.
+- Never request, transmit, or persist seed phrases or raw private keys.
+- A wallet login signature authorizes a session only; it never authorizes a payment.
+- Every payment or purchase requires a separate, exact, immediately visible confirmation.
+- Unsupported merchants and unverifiable results fail closed.
+- A transaction hash is not an order. A purchase completes only with verified chain payment and a real merchant order receipt.
+- Mainnet remains disabled until testnet acceptance, security review, recovery tests, and contract audit pass.
+
+## Specialists available today
+
+| Specialist | Working end to end in this repository | Remaining production capability |
 | --- | --- | --- |
-| Scout | Fetches up to five supplied public URLs, extracts evidence, and returns citations | Live search provider, browser navigation, product discovery, authenticated sessions |
-| Commerce | Validates user-supplied crypto offers, binds approval to the exact asset and amount, and enforces the verified invoice → chain payment → merchant order-receipt lifecycle | Authorized physical-product merchant adapter, authenticated checkout session, refunds and delivery recovery |
-| Growth | Creates deterministic campaign drafts from a stored brand profile and cited evidence | LLM-backed drafting, Telegram/Gmail/X publishing with approval and verified message IDs |
-| Flow | Connects an injected wallet, enforces Monad Testnet, broadcasts an exact native MON transfer, and verifies its mined receipt server-side | Policy-vault enforcement, delegated KMS signer, ERC-20 transfers, replacement and recovery UI |
-| Operator | Validates dependency graphs, runs independent steps in parallel, persists child tasks, supports cancellation/retry, and saves successful workflows as versioned routines | Sentinel pre-flight gate, production queue, schedules/triggers, isolated cloud workers and external-action recovery |
-| Sentinel | Provides clickable bytecode triage and mandatory Flow pre-flight checks for network, sender, recipient, asset, and exact amount | Merchant/domain allowlists, policy-vault state checks, prompt-injection defenses |
+| Scout | Fetches up to five user-supplied public URLs, blocks private-network targets, extracts evidence, and returns citations | Search provider, authenticated browser, broader live discovery |
+| Commerce | Validates source-linked crypto offers and enforces offer → exact approval → invoice → confirmed payment → verified order-receipt state transitions | First authorized physical-product merchant adapter, authenticated checkout, shipping/refund recovery |
+| Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
+| Flow | Prepares an exact Monad Testnet MON transfer, requests the user's browser wallet, and verifies the mined receipt server-side | Deployed policy vault, ERC-20 support, replacement/dropped-transaction recovery |
+| Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
+| Sentinel | Performs bytecode triage and enforces Flow network, sender, recipient, asset, and amount policy checks | Deployed-vault state, merchant/domain policy, prompt-injection controls |
 
-The ten-bot target has not been reached. Six bots exist; four additional bots must be specified and approved before implementation.
+Six specialists exist. The planned ten-bot catalog is intentionally incomplete: a new bot will only be specified and built after explicit product-owner approval.
 
-## Non-mock completion standard
+## Current completion standard
 
-A crypto transfer is complete only after DONADS has:
+A Monad transfer is complete only when the configured RPC proves it is on the expected chain, the user approves the exact intent in their wallet, and DONADS verifies the successful mined receipt, sender, recipient, amount, block, and absence of calldata.
 
-1. Obtained exact user or policy-vault authorization.
-2. Received a real wallet signature.
-3. Broadcast the raw transaction to the configured Monad network.
-4. Received a successful transaction receipt from Monad RPC.
-5. Verified chain ID, recipient, asset, amount, nonce, and transaction status.
+A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
 
-A purchase is complete only after the above transaction proof **and** a real merchant order ID or signed merchant receipt are available. A transaction hash alone is not an order.
+## Security and multi-user model
+
+- Wallet sign-in uses an EIP-4361-shaped, Monad-chain-bound challenge and EIP-191 signature recovery.
+- Challenges expire after five minutes and are single-use; sessions expire after twelve hours.
+- Session tokens remain in browser memory and are stored server-side, not in local storage.
+- Tasks, events, feedback, profiles, routines, payment actions, and orchestration actions are isolated by normalized wallet address.
+- Operator child tasks inherit the parent owner; cross-wallet identifiers return `404` without revealing existence.
+- CORS accepts only configured frontend origins. Monad chain ID is revalidated inside the transaction-confirmation path.
+
+The current in-memory session registry and JSON task stores are appropriate for local/testnet development, not horizontal production. PostgreSQL, an encrypted session store, and a durable queue are required before multi-instance deployment.
 
 ## Architecture
 
-- Rust workspace for specialists, task persistence, routing, and Monad RPC health checks.
-- Next.js interface for specialist workspaces and approval boundaries.
-- Monad testnet is the only permitted execution target until the security and recovery test suite passes.
-- JSON persistence is development-only and must be replaced with a transactional database before production.
-- Saved routines always create a fresh reviewable plan; they never reuse a wallet signature or silently repeat a purchase.
+- `frontend/`: Next.js interface, wallet sign-in, specialist workspaces, approval screens, and mascot motion.
+- `crates/donads-dispatch/`: Axum API, authentication, ownership, routing, persistence, and background orchestration.
+- `crates/bot-*`: bounded Scout, Commerce, Growth, Flow, Operator, and Sentinel implementations.
+- `crates/donads-core/`: shared task model and verified Monad RPC client.
+- `contracts/`: policy-vault contract and Solidity tests.
 
-## Run locally
+Operator executes dependency waves in parallel. Saved routines create a fresh reviewable run; they never reuse a signature or silently repeat a purchase.
 
-Requirements: current stable Rust, Node.js, and npm.
+## Local setup
+
+Requirements: current stable Rust, Node.js, npm, and an EVM browser wallet configured for Monad Testnet.
 
 ```powershell
 Copy-Item .env.example .env
 cargo run -p donads-dispatch
 ```
 
-In a second terminal:
+In another terminal:
 
 ```powershell
 Set-Location frontend
@@ -58,43 +81,38 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. The API binds to `127.0.0.1:8080` by default.
+Open `http://localhost:3000`, select **Sign in**, and approve the message signature. This signature is free and cannot move funds. The API binds to `127.0.0.1:8080` by default.
 
-## Configuration
-
-See `.env.example`. Never commit seed phrases, private keys, browser session data, OAuth tokens, or merchant credentials. Production signing must use a user-controlled wallet or a narrowly delegated key stored in KMS/HSM.
-
-## Required implementation sequence
-
-1. Execute and record the first funded native MON testnet acceptance transfer.
-2. Run `DonadsPolicyVault.sol` behavioral tests with Foundry, audit it, and deploy it to testnet.
-3. Extend the mandatory Sentinel Flow gate with deployed policy-vault state and merchant-domain checks.
-4. Add recovery for delayed, dropped, replaced, and reverted transactions.
-5. Add ERC-20 transfer support with exact token/decimal validation.
-6. Integrate one authorized crypto-accepting test merchant.
-7. Verify a real merchant order receipt and implement refund/recovery behavior.
-8. Replace JSON files with PostgreSQL and a durable job queue.
-9. Add authentication, task ownership, restrictive CORS, rate limits, encrypted secrets, monitoring, and backups.
-10. Complete contract audit, penetration testing, prompt-injection testing, and testnet acceptance before considering mainnet.
+Configuration is documented in `.env.example`. Production credentials must use a secret manager/KMS reference; never commit wallet keys, browser profiles, OAuth tokens, or merchant credentials.
 
 ## Verification
 
 ```powershell
-cargo test --workspace
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+
 Set-Location frontend
-npm test -- --run
+npm test
 npm run lint
 npm run build
-```
 
-Contract checks:
-
-```powershell
-Set-Location contracts
-npm install
+Set-Location ../contracts
 npm run compile
 npm test
 npm audit
 ```
 
-Unit-test doubles are retained inside test files. They verify failure handling and UI behavior; they are not product execution paths and never create user-visible transaction or order claims.
+Unit-test doubles exist only inside tests. They validate failures and UI behavior and never create product-visible payment or order claims.
+
+## Path to the first real product order
+
+1. Deploy and audit the policy vault on Monad Testnet using a funded test wallet; never share its private key.
+2. Add dropped, replaced, reverted, duplicate, and delayed transaction recovery.
+3. Integrate one authorized merchant that sells physical products and directly accepts supported crypto through a documented checkout API.
+4. Bind merchant invoice, wallet payment, fulfillment, order receipt, refund, and support status into one idempotent workflow.
+5. Replace JSON/in-memory infrastructure with PostgreSQL, Redis or an equivalent encrypted session store, and a durable job queue.
+6. Add rate limits, security headers, CI, monitoring, backups, browser isolation, and encrypted connector credentials.
+7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
+8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
+
+The immediate next feature after this security foundation is the first real crypto merchant connector. It extends Commerce; it does not add a new bot.

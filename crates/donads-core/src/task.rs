@@ -81,6 +81,9 @@ impl TaskFeedback {
 pub struct Task {
     /// Globally unique task identifier.
     pub id: Uuid,
+    /// Authenticated wallet address that owns this task and its history.
+    #[serde(default = "legacy_owner_id")]
+    pub owner_id: String,
     /// Original natural-language request.
     pub prompt: String,
     /// Selected bot identifier.
@@ -105,9 +108,16 @@ impl Task {
     /// Creates a queued task after routing has selected a bot.
     #[must_use]
     pub fn queued(input: TaskInput, bot: String) -> Self {
+        Self::queued_for(input, bot, legacy_owner_id())
+    }
+
+    /// Creates a queued task owned by one authenticated principal.
+    #[must_use]
+    pub fn queued_for(input: TaskInput, bot: String, owner_id: String) -> Self {
         let now = unix_time_ms();
         Self {
             id: Uuid::new_v4(),
+            owner_id,
             prompt: input.prompt,
             bot,
             input: input.input,
@@ -147,6 +157,10 @@ impl Task {
         self.updated_at_ms = feedback.submitted_at_ms;
         self.feedback = Some(feedback);
     }
+}
+
+fn legacy_owner_id() -> String {
+    "legacy-local".into()
 }
 
 fn unix_time_ms() -> u64 {

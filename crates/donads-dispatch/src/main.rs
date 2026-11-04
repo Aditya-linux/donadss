@@ -1,10 +1,16 @@
+mod auth;
+
 use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{Context, anyhow};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{
+        HeaderValue, Method, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
+    middleware,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -34,6 +40,10 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use auth::{
+    AuthPrincipal, AuthService, ChallengeInput, ChallengeOutput, SessionOutput, VerifyInput,
+};
+
 type BotMap = HashMap<String, Arc<dyn Bot>>;
 
 #[derive(Clone)]
@@ -45,9 +55,15 @@ struct PersistentTaskStore {
 
 #[derive(Clone)]
 struct PersistentProfileStore {
-    profiles: Arc<RwLock<HashMap<String, BrandProfile>>>,
+    profiles: Arc<RwLock<HashMap<String, OwnedProfileRecord>>>,
     path: Arc<PathBuf>,
     save_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct OwnedProfileRecord {
+    owner_id: String,
+    profile: BrandProfile,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,19 +79,41 @@ struct OperatorRoutine {
 
 #[derive(Clone)]
 struct PersistentRoutineStore {
-    routines: Arc<RwLock<HashMap<String, OperatorRoutine>>>,
+    routines: Arc<RwLock<HashMap<String, OwnedRoutineRecord>>>,
     path: Arc<PathBuf>,
     save_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct OwnedRoutineRecord {
+    owner_id: String,
+    routine: OperatorRoutine,
 }
 
 impl PersistentRoutineStore {
     async fn load(path: PathBuf) -> anyhow::Result<Self> {
         let routines = match tokio::fs::read(&path).await {
-            Ok(bytes) => serde_json::from_slice::<Vec<OperatorRoutine>>(&bytes)
-                .with_context(|| format!("could not parse routine store at {}", path.display()))?
-                .into_iter()
-                .map(|routine| (routine.id.clone(), routine))
-                .collect(),
+            Ok(bytes) => {
+                let records = serde_json::from_slice::<Vec<OwnedRoutineRecord>>(&bytes)
+                    .or_else(|_| {
+                        serde_json::from_slice::<Vec<OperatorRoutine>>(&bytes).map(|legacy| {
+                            legacy
+                                .into_iter()
+                                .map(|routine| OwnedRoutineRecord {
+                                    owner_id: "legacy-local".into(),
+                                    routine,
+                                })
+                                .collect()
+                        })
+                    })
+                    .with_context(|| {
+                        format!("could not parse routine store at {}", path.display())
+                    })?;
+                records
+                    .into_iter()
+                    .map(|record| (owned_key(&record.owner_id, &record.routine.id), record))
+                    .collect()
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(error) => {
                 return Err(error).with_context(|| format!("could not read {}", path.display()));
@@ -88,24 +126,46 @@ impl PersistentRoutineStore {
         })
     }
 
-    async fn list(&self) -> Vec<OperatorRoutine> {
-        let mut routines: Vec<_> = self.routines.read().await.values().cloned().collect();
+    async fn list(&self, owner_id: &str) -> Vec<OperatorRoutine> {
+        let mut routines: Vec<_> = self
+            .routines
+            .read()
+            .await
+            .values()
+            .filter(|record| record.owner_id == owner_id)
+            .map(|record| record.routine.clone())
+            .collect();
         routines.sort_by(|left, right| left.name.cmp(&right.name));
         routines
     }
 
-    async fn get(&self, id: &str) -> Option<OperatorRoutine> {
-        self.routines.read().await.get(id).cloned()
+    async fn get(&self, owner_id: &str, id: &str) -> Option<OperatorRoutine> {
+        self.routines
+            .read()
+            .await
+            .get(&owned_key(owner_id, id))
+            .map(|record| record.routine.clone())
     }
 
-    async fn save(&self, mut routine: OperatorRoutine) -> anyhow::Result<OperatorRoutine> {
+    async fn save(
+        &self,
+        owner_id: &str,
+        mut routine: OperatorRoutine,
+    ) -> anyhow::Result<OperatorRoutine> {
         let mut routines = self.routines.write().await;
-        if let Some(existing) = routines.get(&routine.id) {
-            routine.version = existing.version.saturating_add(1);
-            routine.created_at_ms = existing.created_at_ms;
+        let key = owned_key(owner_id, &routine.id);
+        if let Some(existing) = routines.get(&key) {
+            routine.version = existing.routine.version.saturating_add(1);
+            routine.created_at_ms = existing.routine.created_at_ms;
         }
         routine.updated_at_ms = unix_time_ms();
-        routines.insert(routine.id.clone(), routine.clone());
+        routines.insert(
+            key,
+            OwnedRoutineRecord {
+                owner_id: owner_id.into(),
+                routine: routine.clone(),
+            },
+        );
         drop(routines);
         self.persist().await?;
         Ok(routine)
@@ -113,7 +173,12 @@ impl PersistentRoutineStore {
 
     async fn persist(&self) -> anyhow::Result<()> {
         let _save_guard = self.save_lock.lock().await;
-        let snapshot = self.list().await;
+        let mut snapshot: Vec<_> = self.routines.read().await.values().cloned().collect();
+        snapshot.sort_by(|left, right| {
+            left.owner_id
+                .cmp(&right.owner_id)
+                .then_with(|| left.routine.id.cmp(&right.routine.id))
+        });
         persist_json(self.path.as_ref(), &snapshot).await
     }
 }
@@ -121,11 +186,27 @@ impl PersistentRoutineStore {
 impl PersistentProfileStore {
     async fn load(path: PathBuf) -> anyhow::Result<Self> {
         let profiles = match tokio::fs::read(&path).await {
-            Ok(bytes) => serde_json::from_slice::<Vec<BrandProfile>>(&bytes)
-                .with_context(|| format!("could not parse profile store at {}", path.display()))?
-                .into_iter()
-                .map(|profile| (profile.id.clone(), profile))
-                .collect(),
+            Ok(bytes) => {
+                let records = serde_json::from_slice::<Vec<OwnedProfileRecord>>(&bytes)
+                    .or_else(|_| {
+                        serde_json::from_slice::<Vec<BrandProfile>>(&bytes).map(|legacy| {
+                            legacy
+                                .into_iter()
+                                .map(|profile| OwnedProfileRecord {
+                                    owner_id: "legacy-local".into(),
+                                    profile,
+                                })
+                                .collect()
+                        })
+                    })
+                    .with_context(|| {
+                        format!("could not parse profile store at {}", path.display())
+                    })?;
+                records
+                    .into_iter()
+                    .map(|record| (owned_key(&record.owner_id, &record.profile.id), record))
+                    .collect()
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(error) => {
                 return Err(error).with_context(|| format!("could not read {}", path.display()));
@@ -138,23 +219,45 @@ impl PersistentProfileStore {
         })
     }
 
-    async fn list(&self) -> Vec<BrandProfile> {
-        let mut profiles: Vec<_> = self.profiles.read().await.values().cloned().collect();
+    async fn list(&self, owner_id: &str) -> Vec<BrandProfile> {
+        let mut profiles: Vec<_> = self
+            .profiles
+            .read()
+            .await
+            .values()
+            .filter(|record| record.owner_id == owner_id)
+            .map(|record| record.profile.clone())
+            .collect();
         profiles.sort_by(|left, right| left.project_name.cmp(&right.project_name));
         profiles
     }
 
-    async fn get(&self, id: &str) -> Option<BrandProfile> {
-        self.profiles.read().await.get(id).cloned()
+    async fn get(&self, owner_id: &str, id: &str) -> Option<BrandProfile> {
+        self.profiles
+            .read()
+            .await
+            .get(&owned_key(owner_id, id))
+            .map(|record| record.profile.clone())
     }
 
-    async fn save(&self, mut profile: BrandProfile) -> anyhow::Result<BrandProfile> {
+    async fn save(
+        &self,
+        owner_id: &str,
+        mut profile: BrandProfile,
+    ) -> anyhow::Result<BrandProfile> {
         let mut profiles = self.profiles.write().await;
+        let key = owned_key(owner_id, &profile.id);
         profile.version = profiles
-            .get(&profile.id)
-            .map_or(1, |existing| existing.version.saturating_add(1));
+            .get(&key)
+            .map_or(1, |existing| existing.profile.version.saturating_add(1));
         profile.updated_at_ms = unix_time_ms();
-        profiles.insert(profile.id.clone(), profile.clone());
+        profiles.insert(
+            key,
+            OwnedProfileRecord {
+                owner_id: owner_id.into(),
+                profile: profile.clone(),
+            },
+        );
         drop(profiles);
         self.persist().await?;
         Ok(profile)
@@ -162,8 +265,12 @@ impl PersistentProfileStore {
 
     async fn persist(&self) -> anyhow::Result<()> {
         let _save_guard = self.save_lock.lock().await;
-        let mut snapshot = self.list().await;
-        snapshot.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut snapshot: Vec<_> = self.profiles.read().await.values().cloned().collect();
+        snapshot.sort_by(|left, right| {
+            left.owner_id
+                .cmp(&right.owner_id)
+                .then_with(|| left.profile.id.cmp(&right.profile.id))
+        });
         persist_json(self.path.as_ref(), &snapshot).await
     }
 }
@@ -596,6 +703,10 @@ async fn persist_json<T: Serialize>(path: &PathBuf, value: &T) -> anyhow::Result
     Ok(())
 }
 
+fn owned_key(owner_id: &str, record_id: &str) -> String {
+    format!("{owner_id}\0{record_id}")
+}
+
 #[derive(Clone)]
 struct AppState {
     bots: Arc<BotMap>,
@@ -603,6 +714,7 @@ struct AppState {
     profiles: PersistentProfileStore,
     routines: PersistentRoutineStore,
     chain: ChainClient,
+    auth: AuthService,
 }
 
 #[derive(Serialize)]
@@ -782,6 +894,12 @@ async fn main() -> anyhow::Result<()> {
     };
     let rpc_url = env::var("MONAD_RPC_URL").unwrap_or_else(|_| default_rpc.into());
     let chain = ChainClient::new(rpc_url, network).context("failed to create Monad client")?;
+    let auth = AuthService::new(
+        env::var("DONADS_AUTH_DOMAIN").unwrap_or_else(|_| "localhost:3000".into()),
+        env::var("DONADS_AUTH_URI").unwrap_or_else(|_| "http://localhost:3000".into()),
+        network.chain_id(),
+    )
+    .map_err(|error| anyhow!(error.to_string()))?;
 
     let scout: Arc<dyn Bot> = Arc::new(Scout::new().context("failed to create Scout HTTP client")?);
     let commerce: Arc<dyn Bot> = Arc::new(Commerce);
@@ -812,10 +930,9 @@ async fn main() -> anyhow::Result<()> {
         profiles,
         routines,
         chain,
+        auth: auth.clone(),
     };
-    let app = Router::new()
-        .route("/v1/health", get(health))
-        .route("/v1/bots", get(list_bots))
+    let protected = Router::new()
         .route("/v1/tasks", post(create_task))
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/events", get(get_task_events))
@@ -835,8 +952,15 @@ async fn main() -> anyhow::Result<()> {
             "/v1/brand-profiles/{id}",
             get(get_profile).put(save_profile),
         )
+        .route_layer(middleware::from_fn_with_state(auth, auth::require_auth));
+    let app = Router::new()
+        .route("/v1/health", get(health))
+        .route("/v1/bots", get(list_bots))
+        .route("/v1/auth/challenge", post(auth_challenge))
+        .route("/v1/auth/verify", post(auth_verify))
+        .merge(protected)
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer()?)
         .with_state(state);
 
     let address: SocketAddr = env::var("DONADS_BIND_ADDRESS")
@@ -887,9 +1011,56 @@ async fn list_bots(State(state): State<AppState>) -> Json<Vec<BotDescriptor>> {
     Json(bots)
 }
 
+async fn auth_challenge(
+    State(state): State<AppState>,
+    Json(input): Json<ChallengeInput>,
+) -> Result<Json<ChallengeOutput>, impl IntoResponse> {
+    state.auth.create_challenge(&input.address).await.map(Json)
+}
+
+async fn auth_verify(
+    State(state): State<AppState>,
+    Json(input): Json<VerifyInput>,
+) -> Result<Json<SessionOutput>, impl IntoResponse> {
+    state.auth.verify(input).await.map(Json)
+}
+
+fn cors_layer() -> anyhow::Result<CorsLayer> {
+    let configured = env::var("DONADS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".into());
+    let origins: Vec<HeaderValue> = configured
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| {
+            origin
+                .parse()
+                .with_context(|| format!("invalid CORS origin: {origin}"))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    if origins.is_empty() {
+        return Err(anyhow!(
+            "DONADS_ALLOWED_ORIGINS must contain at least one origin"
+        ));
+    }
+    Ok(CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::PUT])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE]))
+}
+
 async fn create_task(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Json(input): Json<TaskInput>,
+) -> Result<(StatusCode, Json<Task>), ApiError> {
+    enqueue_task(state, input, principal.owner_id).await
+}
+
+async fn enqueue_task(
+    state: AppState,
+    input: TaskInput,
+    owner_id: String,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     if input.prompt.trim().is_empty() {
         return Err(ApiError::bad_request("prompt cannot be empty"));
@@ -900,7 +1071,7 @@ async fn create_task(
         .get(&bot_id)
         .cloned()
         .ok_or_else(|| ApiError::bad_request(format!("bot '{bot_id}' is not available")))?;
-    let task = Task::queued(input, bot_id.clone());
+    let task = Task::queued_for(input, bot_id.clone(), owner_id);
     state
         .tasks
         .insert(task.clone())
@@ -975,30 +1146,34 @@ async fn create_task(
 
 async fn get_task(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Task>, ApiError> {
+    owned_task(&state, id, &principal.owner_id).await.map(Json)
+}
+
+async fn owned_task(state: &AppState, id: Uuid, owner_id: &str) -> Result<Task, ApiError> {
     state
         .tasks
         .get(id)
         .await
-        .map(Json)
+        .filter(|task| task.owner_id == owner_id)
         .ok_or_else(|| ApiError::not_found("task not found"))
 }
 
 async fn get_task_events(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<TaskEvent>>, ApiError> {
-    state
-        .tasks
-        .get(id)
+    owned_task(&state, id, &principal.owner_id)
         .await
         .map(|task| Json(task.events))
-        .ok_or_else(|| ApiError::not_found("task not found"))
 }
 
 async fn record_feedback(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
     Json(input): Json<FeedbackInput>,
 ) -> Result<Json<Task>, ApiError> {
@@ -1011,11 +1186,7 @@ async fn record_feedback(
             "feedback note must be 1,000 characters or fewer",
         ));
     }
-    let task = state
-        .tasks
-        .get(id)
-        .await
-        .ok_or_else(|| ApiError::not_found("task not found"))?;
+    let task = owned_task(&state, id, &principal.owner_id).await?;
     if !matches!(task.status, TaskStatus::Completed { .. }) {
         return Err(ApiError::bad_request("feedback requires a completed task"));
     }
@@ -1027,12 +1198,16 @@ async fn record_feedback(
         .map_err(ApiError::internal)
 }
 
-async fn list_routines(State(state): State<AppState>) -> Json<Vec<OperatorRoutine>> {
-    Json(state.routines.list().await)
+async fn list_routines(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+) -> Json<Vec<OperatorRoutine>> {
+    Json(state.routines.list(&principal.owner_id).await)
 }
 
 async fn capture_routine(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(task_id): Path<Uuid>,
     Json(input): Json<RoutineCaptureInput>,
 ) -> Result<(StatusCode, Json<OperatorRoutine>), ApiError> {
@@ -1060,6 +1235,7 @@ async fn capture_routine(
         ));
     }
 
+    owned_task(&state, task_id, &principal.owner_id).await?;
     let workflow = state
         .tasks
         .operator_workflow(task_id)
@@ -1098,7 +1274,7 @@ async fn capture_routine(
     };
     state
         .routines
-        .save(routine)
+        .save(&principal.owner_id, routine)
         .await
         .map(|saved| (StatusCode::CREATED, Json(saved)))
         .map_err(ApiError::internal)
@@ -1106,11 +1282,12 @@ async fn capture_routine(
 
 async fn run_routine(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     let routine = state
         .routines
-        .get(&id)
+        .get(&principal.owner_id, &id)
         .await
         .ok_or_else(|| ApiError::not_found("routine not found"))?;
     let task_input = TaskInput {
@@ -1118,14 +1295,16 @@ async fn run_routine(
         bot: Some("operator".into()),
         input: serde_json::to_value(routine.input).map_err(ApiError::internal)?,
     };
-    create_task(State(state), Json(task_input)).await
+    enqueue_task(state, task_input, principal.owner_id).await
 }
 
 async fn flow_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
     Json(action): Json<WorkflowAction>,
 ) -> Result<Json<FlowActionResponse>, ApiError> {
+    owned_task(&state, id, &principal.owner_id).await?;
     if matches!(&action, WorkflowAction::Approve { .. }) {
         let workflow = state
             .tasks
@@ -1155,9 +1334,11 @@ async fn flow_action(
 
 async fn confirm_flow_transaction(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
     Json(input): Json<FlowTransactionInput>,
 ) -> Result<Json<Task>, ApiError> {
+    owned_task(&state, id, &principal.owner_id).await?;
     let workflow = state
         .tasks
         .flow_workflow(id)
@@ -1232,9 +1413,11 @@ fn sentinel_check_flow(workflow: &PaymentWorkflow) -> Result<(), ApiError> {
 
 async fn commerce_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
     Json(action): Json<CommerceAction>,
 ) -> Result<Json<Task>, ApiError> {
+    owned_task(&state, id, &principal.owner_id).await?;
     match action {
         CommerceAction::Approve {
             approved_total_atomic,
@@ -1292,9 +1475,11 @@ async fn approve_commerce_purchase(
 
 async fn operator_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<Uuid>,
     Json(action): Json<OperatorAction>,
 ) -> Result<Json<Task>, ApiError> {
+    owned_task(&state, id, &principal.owner_id).await?;
     let should_run = matches!(&action, OperatorAction::Start | OperatorAction::RetryFailed);
     let task = state
         .tasks
@@ -1357,6 +1542,10 @@ async fn run_operator_step(
     workflow: OperatorWorkflow,
     step_index: usize,
 ) {
+    let Some(parent) = state.tasks.get(parent_id).await else {
+        error!(task_id = %parent_id, "Operator parent task disappeared");
+        return;
+    };
     let step = workflow.steps[step_index].clone();
     let Some(bot) = state.bots.get(&step.bot).cloned() else {
         let message = format!("specialist '{}' is no longer registered", step.bot);
@@ -1370,13 +1559,14 @@ async fn run_operator_step(
         return;
     };
     let child_input = materialize_operator_step_input(&state, &workflow, &step).await;
-    let child = Task::queued(
+    let child = Task::queued_for(
         TaskInput {
             prompt: step.prompt,
             bot: Some(step.bot.clone()),
             input: child_input,
         },
         step.bot,
+        parent.owner_id,
     );
     if let Err(error) = state.tasks.insert(child.clone()).await {
         let message = "Operator could not persist the child task.".to_owned();
@@ -1624,17 +1814,21 @@ fn commerce_api_error(error: CommerceMutationError) -> ApiError {
     }
 }
 
-async fn list_profiles(State(state): State<AppState>) -> Json<Vec<BrandProfile>> {
-    Json(state.profiles.list().await)
+async fn list_profiles(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+) -> Json<Vec<BrandProfile>> {
+    Json(state.profiles.list(&principal.owner_id).await)
 }
 
 async fn get_profile(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<String>,
 ) -> Result<Json<BrandProfile>, ApiError> {
     state
         .profiles
-        .get(&id)
+        .get(&principal.owner_id, &id)
         .await
         .map(Json)
         .ok_or_else(|| ApiError::not_found("brand profile not found"))
@@ -1642,6 +1836,7 @@ async fn get_profile(
 
 async fn save_profile(
     State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
     Path(id): Path<String>,
     Json(mut profile): Json<BrandProfile>,
 ) -> Result<Json<BrandProfile>, ApiError> {
@@ -1650,7 +1845,7 @@ async fn save_profile(
     profile.id = id;
     state
         .profiles
-        .save(profile)
+        .save(&principal.owner_id, profile)
         .await
         .map(Json)
         .map_err(ApiError::internal)
@@ -1940,12 +2135,12 @@ mod tests {
             .await
             .expect("profile store should load");
         let first = store
-            .save(brand_profile())
+            .save("owner-a", brand_profile())
             .await
             .expect("profile should save");
         assert_eq!(first.version, 1);
         let second = store
-            .save(brand_profile())
+            .save("owner-a", brand_profile())
             .await
             .expect("profile should update");
         assert_eq!(second.version, 2);
@@ -1954,9 +2149,13 @@ mod tests {
             .await
             .expect("profile store should reload");
         assert_eq!(
-            reloaded.get("donads").await.map(|profile| profile.version),
+            reloaded
+                .get("owner-a", "donads")
+                .await
+                .map(|profile| profile.version),
             Some(2)
         );
+        assert!(reloaded.get("owner-b", "donads").await.is_none());
         let _ = tokio::fs::remove_file(path).await;
     }
 
@@ -1986,19 +2185,34 @@ mod tests {
                 }],
             },
         };
-        assert_eq!(store.save(routine.clone()).await.expect("save").version, 1);
-        assert_eq!(store.save(routine).await.expect("update").version, 2);
+        assert_eq!(
+            store
+                .save("owner-a", routine.clone())
+                .await
+                .expect("save")
+                .version,
+            1
+        );
+        assert_eq!(
+            store
+                .save("owner-a", routine)
+                .await
+                .expect("update")
+                .version,
+            2
+        );
 
         let reloaded = PersistentRoutineStore::load(path.clone())
             .await
             .expect("routine store should reload");
         assert_eq!(
             reloaded
-                .get("research-draft")
+                .get("owner-a", "research-draft")
                 .await
                 .map(|routine| routine.version),
             Some(2)
         );
+        assert!(reloaded.get("owner-b", "research-draft").await.is_none());
         let _ = tokio::fs::remove_file(path).await;
     }
 

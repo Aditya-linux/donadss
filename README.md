@@ -97,6 +97,19 @@ Open `http://localhost:3000`, select **Sign in**, and approve the message signat
 
 Configuration is documented in `.env.example`. Production credentials must use a secret manager/KMS reference; never commit wallet keys, browser profiles, OAuth tokens, or merchant credentials.
 
+## Public testnet preview
+
+The web interface and dispatcher are deployed separately:
+
+- Deploy `frontend/` to Vercel with `NEXT_PUBLIC_DONADS_API_URL` set to the public HTTPS dispatcher URL.
+- Deploy the repository-root `Dockerfile` to a persistent container service. Attach a volume at `/app/data`; the current preview stores tasks, profiles, and routines there.
+- Configure the dispatcher with `DONADS_AUTH_DOMAIN`, `DONADS_AUTH_URI`, and `DONADS_ALLOWED_ORIGINS` matching the exact Vercel hostname. Keep `DONADS_NETWORK=testnet` and `MONAD_RPC_URL=https://testnet-rpc.monad.xyz`.
+- Use the service health check `GET /v1/health`. Never expose a private key as a deployment variable.
+
+Vercel alone is not sufficient for the current backend: the dispatcher is a long-running Axum service and its preview persistence requires a mounted volume. The JSON stores and in-memory sessions remain single-instance preview infrastructure, not production infrastructure.
+
+To test a real transfer, connect a dedicated user-controlled wallet, select Monad Testnet (chain ID `10143`), fund that wallet with test MON from the official faucet, and submit a Flow task. The wallet address displayed by DONADS is the address to fund. There is no DONADS custody address and no agent private key.
+
 ## Verification
 
 ```powershell

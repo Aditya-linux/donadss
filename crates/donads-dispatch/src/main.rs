@@ -990,9 +990,13 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let address: SocketAddr = env::var("DONADS_BIND_ADDRESS")
-        .unwrap_or_else(|_| "127.0.0.1:8080".into())
+        .unwrap_or_else(|_| {
+            env::var("PORT")
+                .map(|port| format!("0.0.0.0:{port}"))
+                .unwrap_or_else(|_| "127.0.0.1:8080".into())
+        })
         .parse()
-        .context("DONADS_BIND_ADDRESS must be a valid socket address")?;
+        .context("DONADS_BIND_ADDRESS or PORT must form a valid socket address")?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "DONADS dispatch listening");
     axum::serve(listener, app)

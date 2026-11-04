@@ -95,7 +95,7 @@ export function buildTaskReport(task: CompletedTask): TaskReportModel {
 
 async function loadMascot(): Promise<Uint8Array | null> {
   try {
-    const response = await fetch("/brand/donads-mascot.jpeg");
+    const response = await fetch("/brand/donads-mascot-tile.png");
     if (!response.ok) return null;
     return new Uint8Array(await response.arrayBuffer());
   } catch {
@@ -139,7 +139,7 @@ export async function generateTaskReportPdf(
   document.setFontSize(9);
   document.setTextColor(100, 91, 86);
   document.text("Decentralized On-chain Neural Agent Dispatch System", margin, 36);
-  if (mascot) document.addImage(mascot, "JPEG", pageWidth - margin - 17, 12, 17, 17);
+  if (mascot) document.addImage(mascot, "PNG", pageWidth - margin - 17, 12, 17, 17);
 
   let cursor = 43;
   const tableDocument = document as typeof document & { lastAutoTable?: { finalY: number } };

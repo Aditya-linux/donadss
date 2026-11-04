@@ -84,6 +84,7 @@ export type PaymentWorkflow = {
   state:
     | "awaiting_approval"
     | "authorized"
+    | "submitted"
     | "confirmed"
     | "rejected";
   payouts: FlowPayout[];
@@ -91,6 +92,10 @@ export type PaymentWorkflow = {
   approval_conditions: string[];
   linked_task_id: string | null;
   approval: { decision: string; note: string; decided_at_ms: number } | null;
+  submission: {
+    transaction_hash: string;
+    submitted_at_ms: number;
+  } | null;
   execution: {
     transaction_hash: string;
     block_number: number;
@@ -629,6 +634,20 @@ export async function confirmFlowTransaction(
   signal?: AbortSignal,
 ): Promise<FlowCompletedTask> {
   const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-transaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transaction_hash: transactionHash }),
+    signal,
+  });
+  return readJson<FlowCompletedTask>(response);
+}
+
+export async function recordFlowSubmission(
+  taskId: string,
+  transactionHash: string,
+  signal?: AbortSignal,
+): Promise<FlowCompletedTask> {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-submission`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ transaction_hash: transactionHash }),

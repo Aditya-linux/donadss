@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   title: "DONADS — Autonomous work for Monad",
   description:
     "A precise, approval-gated agent workspace for research, campaigns, workflows, and Monad Testnet operations.",
+  icons: {
+    icon: "/brand/donads-mascot-tile.png",
+    apple: "/brand/donads-mascot-tile.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

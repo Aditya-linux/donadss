@@ -5,12 +5,11 @@ import {
   CheckCircle2,
   Megaphone,
   Send,
-  Sparkles,
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { FeedbackControls } from "@/components/feedback-controls";
-import { Mascot, MascotLoader } from "@/components/mascot";
+import { Mascot, MascotLoader, SpecialistMark } from "@/components/mascot";
 import { ReportDownloadButton } from "@/components/report-download-button";
 import {
   ApiError,
@@ -155,7 +154,7 @@ function BrandForm({
     <section className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6" aria-labelledby="growth-brief-title">
       <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
         <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground"><Sparkles className="size-4" aria-hidden="true" /></span>
+          <SpecialistMark icon={Megaphone} size={40} />
           <div><h1 id="growth-brief-title" className="text-base font-semibold">Campaign brief</h1><p className="mt-1 text-xs leading-5 text-muted-foreground">Saved as reusable brand memory when the campaign is created.</p></div>
         </div>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">

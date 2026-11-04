@@ -1,27 +1,34 @@
 "use client";
 
-import { ArrowUp, CheckCircle2, FileText, ImageIcon, Paperclip, Sparkles, X } from "lucide-react";
+import { ArrowUp, CheckCircle2, CircleDollarSign, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
-import { Mascot, MascotLoader } from "@/components/mascot";
+import { Mascot, MascotLoader, MascotMark, SpecialistMark } from "@/components/mascot";
 import { ReportDownloadButton } from "@/components/report-download-button";
 import {
+  applyFlowAction,
   applyOperatorAction,
+  confirmFlowTransaction,
+  createFlowTask,
   createGrowthTask,
   createOperatorTask,
   createScoutTask,
   createSentinelTask,
   type CompletedTask,
+  type FlowCompletedTask,
   type AiAttachmentInput,
   type OperatorStepInput,
   type Task,
   waitForOperator,
   waitForTask,
   planAiTask,
+  recordFlowSubmission,
 } from "@/lib/donads-api";
 import { planUnifiedTask } from "@/lib/task-planner";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
+import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
+import { connectWalletProvider, ensureMonadTestnet, monToWeiHex } from "@/lib/wallet-provider";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask };
 type Attachment = { id: string; file: File; previewUrl: string | null; textContent: string | null };
@@ -34,7 +41,17 @@ const examples = [
   "Research https://monad.xyz and summarize the key facts",
   "Research https://monad.xyz and create a 7-day launch campaign",
   "Scan this contract bytecode: 0x6000ff",
+  "Send 0.01 MON to 0xYOUR_WALLET_ADDRESS for testing",
 ];
+
+const specialistIcons = {
+  scout: Radar,
+  commerce: ShoppingBag,
+  growth: Megaphone,
+  flow: CircleDollarSign,
+  operator: Workflow,
+  sentinel: ShieldCheck,
+} as const;
 
 function resultText(task: CompletedTask): string {
   if (task.bot === "operator") {
@@ -59,7 +76,20 @@ function fileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
 }
 
-export function UnifiedTaskWorkspace({ signedIn, aiConfigured = false, initialTask = null, onTaskCompleted }: { signedIn: boolean; aiConfigured?: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
+function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowCompletedTask; working: boolean; onApprove: () => void; onReject: () => void }) {
+  const workflow = task.status.data.workflow;
+  const payout = workflow.payouts[0];
+  const actionable = ["awaiting_approval", "authorized", "submitted"].includes(workflow.state);
+  return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
+    <div className="flex items-center justify-between gap-3"><span className="font-medium">Exact Monad Testnet intent</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px] capitalize">{workflow.state.replaceAll("_", " ")}</span></div>
+    <div><p className="font-mono text-base font-semibold tabular-nums">{payout.amount} MON</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">To {payout.recipient_address}</p></div>
+    <p className="text-xs leading-5 text-muted-foreground">Your wallet must show this exact recipient and amount. DONADS reports completion only after the mined receipt matches both.</p>
+    {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transaction" : "Approve in wallet and send"}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
+    {workflow.execution ? <a href={`https://testnet.monadexplorer.com/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">View verified transaction <ExternalLink className="size-3.5" aria-hidden="true" /></a> : null}
+  </div>;
+}
+
+export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigured = false, initialTask = null, onTaskCompleted }: { signedIn: boolean; walletAddress?: string | null; aiConfigured?: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -123,7 +153,20 @@ export function UnifiedTaskWorkspace({ signedIn, aiConfigured = false, initialTa
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
       let completed: CompletedTask;
-      if (plan.kind === "scout") {
+      if (plan.kind === "flow") {
+        if (!walletAddress) throw new Error("Reconnect your wallet before preparing a transfer.");
+        setProgress("Flow is validating the exact Monad transfer…");
+        const queued = await createFlowTask({
+          title: "Chat-initiated Monad transfer",
+          purpose: plan.purpose,
+          payer: walletAddress,
+          payouts: [{ recipient_name: "Recipient", recipient_address: plan.recipient, asset: "MON", amount: plan.amount, milestone: plan.purpose, deadline: null }],
+          approval_conditions: ["Exact sender, recipient, MON amount, and Monad Testnet chain approved"],
+          linked_task_id: null,
+        }, signal);
+        completed = await waitForTask(queued.id, undefined, signal);
+        if (completed.bot !== "flow") throw new Error("Flow returned an unexpected task.");
+      } else if (plan.kind === "scout") {
         setProgress("Scout is reading and citing the supplied sources…");
         const queued = await createScoutTask(plan.prompt, signal, modelAttachments);
         completed = await waitForTask(queued.id, (task) => setProgress(task.events.at(-1)?.message ?? "Scout is verifying the evidence…"), signal);
@@ -180,6 +223,75 @@ export function UnifiedTaskWorkspace({ signedIn, aiConfigured = false, initialTa
     }
   }
 
+  function updateFlowMessage(messageId: string, task: FlowCompletedTask) {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: resultText(task), task } : message));
+    onTaskCompleted?.();
+  }
+
+  async function rejectFlow(messageId: string, task: FlowCompletedTask) {
+    if (task.status.data.workflow.state !== "awaiting_approval") return;
+    setWorking(true);
+    setProgress("Flow is rejecting the transfer intent…");
+    setError(null);
+    try {
+      updateFlowMessage(messageId, (await applyFlowAction(task.id, { action: "reject", reason: "Rejected in DONADS chat" })).task);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The transfer intent could not be rejected.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function authorizeFlow(messageId: string, task: FlowCompletedTask) {
+    setWorking(true);
+    setProgress("Flow is waiting for your wallet and Monad confirmation…");
+    setError(null);
+    try {
+      let current = task;
+      if (current.status.data.workflow.state === "awaiting_approval") {
+        current = (await applyFlowAction(task.id, { action: "approve", note: "Exact chat transfer approved." })).task;
+        updateFlowMessage(messageId, current);
+      }
+
+      let transactionHash = current.status.data.workflow.submission?.transaction_hash ?? readPendingFlowHash(task.id);
+      if (current.status.data.workflow.state === "authorized") {
+        if (!transactionHash) {
+          const provider = await connectWalletProvider();
+          await ensureMonadTestnet(provider);
+          const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+          const from = accounts[0];
+          const workflow = current.status.data.workflow;
+          if (!from || from.toLowerCase() !== workflow.payer.toLowerCase()) throw new Error("Connected wallet does not match the wallet bound to this intent.");
+          const payout = workflow.payouts[0];
+          transactionHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: payout.recipient_address, value: monToWeiHex(payout.amount) }] }) as string;
+          rememberPendingFlowHash(task.id, transactionHash);
+        }
+        current = await recordFlowSubmission(task.id, transactionHash);
+        updateFlowMessage(messageId, current);
+      }
+
+      if (!transactionHash) throw new Error("No wallet transaction has been submitted for this intent.");
+      let lastError: Error | undefined;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        try {
+          const confirmed = await confirmFlowTransaction(task.id, transactionHash);
+          forgetPendingFlowHash(task.id);
+          updateFlowMessage(messageId, confirmed);
+          return;
+        } catch (cause) {
+          lastError = cause instanceof Error ? cause : new Error("Receipt verification failed.");
+          if (!/not been mined|not known/i.test(lastError.message)) throw lastError;
+          await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        }
+      }
+      throw lastError ?? new Error("The submitted transaction was not confirmed before the timeout. Retry verification; DONADS will not send it again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The transaction could not be completed.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const value = prompt.trim();
@@ -206,18 +318,18 @@ export function UnifiedTaskWorkspace({ signedIn, aiConfigured = false, initialTa
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-40 pt-8 sm:px-6">
         {!messages.length ? (
           <section className="my-auto flex flex-col items-center py-12 text-center">
-            <Mascot size={88} />
+            <Mascot size={120} />
             <h1 className="mt-7 text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">What should DONADS complete?</h1>
             <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">One request in. The right specialists coordinate behind the scenes, with wallet approval reserved for you.</p>
-            <div className="mt-8 grid w-full gap-2 sm:grid-cols-3">
+            <div className="mt-8 grid w-full gap-2 sm:grid-cols-2">
               {examples.map((example) => <button key={example} type="button" onClick={() => setPrompt(example)} className="rounded-xl border border-border bg-card p-3 text-left text-xs leading-5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">{example}</button>)}
             </div>
           </section>
         ) : (
           <ol className="space-y-7 py-4" aria-live="polite">
             {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
-              {message.role === "assistant" ? <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><Sparkles className="size-4" /></span> : null}
-              <div className="min-w-0"><p>{message.text}</p>{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
+              {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
+              <div className="min-w-0"><p>{message.text}</p>{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
             </li>)}
           </ol>
         )}

@@ -17,4 +17,15 @@ describe("AI planner fallback", () => {
     const result = await planTask("0x1111111111111111111111111111111111111111", "Pay this person");
     expect(result.plan.kind).toBe("clarify");
   });
+
+  it("keeps complete payment values outside the model", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "configured-but-unused");
+    const result = await planTask(
+      "0x1111111111111111111111111111111111111111",
+      "Send 0.1 MON to 0x2222222222222222222222222222222222222222",
+    );
+    expect(result.mode).toBe("deterministic");
+    expect(result.plan).toMatchObject({ kind: "flow", amount: "0.1" });
+    expect(result.fallback_reason).toMatch(/outside the model/i);
+  });
 });

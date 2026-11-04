@@ -47,6 +47,30 @@ assert(created.response.status === 201, `Task creation failed: ${JSON.stringify(
 assert(created.payload.status.state === "completed", "Sentinel task did not complete.");
 assert(created.payload.status.data.findings[0]?.id === "SELFDESTRUCT_REACHABLE", "Expected Sentinel finding was absent.");
 
+const flow = await request("/api/v1/tasks", {
+  method: "POST",
+  body: JSON.stringify({
+    prompt: "Prepare a checkpointed chat transfer",
+    bot: "flow",
+    input: {
+      title: "Acceptance chat transfer",
+      purpose: "Verify submission checkpoint without moving funds",
+      payer: account.address,
+      payouts: [{ recipient_name: "Acceptance recipient", recipient_address: "0x2222222222222222222222222222222222222222", asset: "MON", amount: "0.001", milestone: "Acceptance", deadline: null }],
+      approval_conditions: ["Exact values reviewed"],
+      linked_task_id: null,
+    },
+  }),
+}, token);
+assert(flow.response.status === 201 && flow.payload.status.data.workflow.state === "awaiting_approval", "Flow intent creation failed.");
+const flowApproved = await request(`/api/v1/tasks/${flow.payload.id}/flow-actions`, { method: "POST", body: JSON.stringify({ action: "approve" }) }, token);
+assert(flowApproved.response.ok && flowApproved.payload.task.status.data.workflow.state === "authorized", "Flow authorization failed.");
+const checkpointHash = `0x${"ab".repeat(32)}`;
+const flowSubmitted = await request(`/api/v1/tasks/${flow.payload.id}/flow-submission`, { method: "POST", body: JSON.stringify({ transaction_hash: checkpointHash }) }, token);
+assert(flowSubmitted.response.ok && flowSubmitted.payload.status.data.workflow.state === "submitted", "Flow submission checkpoint failed.");
+const flowSubmittedAgain = await request(`/api/v1/tasks/${flow.payload.id}/flow-submission`, { method: "POST", body: JSON.stringify({ transaction_hash: checkpointHash }) }, token);
+assert(flowSubmittedAgain.response.ok && flowSubmittedAgain.payload.status.data.workflow.audit_history.filter((event) => event.event === "transaction_submitted").length === 1, "Flow submission checkpoint was not idempotent.");
+
 const operator = await request("/api/v1/tasks", {
   method: "POST",
   body: JSON.stringify({
@@ -143,4 +167,5 @@ console.log(JSON.stringify({
   balance_network: balance.payload.network,
   ai_remaining_today: aiUsage.payload.remaining_today,
   ai_configured: aiUsage.payload.configured,
+  flow_submission_checkpoint: flowSubmitted.payload.status.data.workflow.state,
 }, null, 2));

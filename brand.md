@@ -93,7 +93,9 @@ Avoid “revolutionary,” “game-changing,” “unlock,” “seamless,” an
 
 ## Official mascot and process motion
 
-- The approved product mark is `WhatsApp Image 2026-10-29 at 9.54.34 PM.jpeg`.
+- The approved primary product mark is `White Robot Mascot on Brown Tile.png`, published as `frontend/public/brand/donads-mascot-tile.png`.
+- The approved expressive mascot artwork is `Cute White Robot Mascot Head.png`, published as `frontend/public/brand/donads-mascot-head.png`.
+- Specialist marks combine the primary product mark with the existing specialist icon as a small secondary badge.
 - The approved nine-pose process sequence is `WhatsApp Image 2026-10-29 at 9.55.19 PM.jpeg`.
 - Long-running work uses this order: idle, look around, prepare, jump, mid-air, spin, processing, almost there, back to idle.
 - The loop lasts about 1.25 seconds and follows the supplied one-second reference clip's stop-motion rhythm.

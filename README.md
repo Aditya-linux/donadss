@@ -1,12 +1,28 @@
 # DONADS
 
-![DONADS mascot](frontend/public/brand/donads-mascot.jpeg)
+![DONADS mascot](frontend/public/brand/donads-mascot-tile.png)
 
 **Decentralized On-chain Neural Agent Dispatch System** — a crypto-native agent workspace for Monad that turns a user goal into coordinated, permission-bounded work and reports completion only when the result can be verified.
 
 ## The problem
 
 General AI assistants can recommend actions, but recommendations are not completed tasks. Commerce, payments, research, campaigns, and long-running workflows need authenticated tools, durable state, explicit approval, recovery, and receipts. DONADS is building that execution layer without taking custody of a user's seed phrase or disguising a mock as a real result.
+
+## Why DONADS instead of a general-purpose agent
+
+Grok Bot is currently the broader product: it provides persistent cloud computers, authenticated browsers, connected apps, parallel bots, learned routines, and background work. DONADS does not claim to outperform that general-purpose automation layer today.
+
+DONADS is purpose-built for crypto execution on Monad. Its differentiation is not another chatbot or a different mascot; it is an approval and verification system around agent work:
+
+- A wallet remains user-controlled, and a login signature can never authorize a payment.
+- Financial steps are represented as exact, reviewable intents instead of natural-language permission.
+- Sentinel and Flow validate chain, sender, recipient, asset, amount, calldata, and mined receipt outside the language model.
+- Commerce requires both verified on-chain payment and a real merchant order receipt before reporting completion.
+- Operator can coordinate specialists, but cannot inherit wallet-signing authority or silently move funds.
+- Task history, evidence, child-agent events, transaction receipts, and PDF reports create an auditable completion record.
+- The planned policy vault adds revocable session permissions with recipient, value, daily, expiry, and replay limits on Monad.
+
+The product thesis is focused: use a general agent for broad browser and office work; use DONADS when a Monad task needs constrained authority, explicit wallet consent, deterministic validation, and cryptographic proof of completion. The immediate goal is to make that focused path excellent before expanding into a general cloud-computer platform.
 
 ## Product vision
 
@@ -31,7 +47,7 @@ The target platform includes persistent cloud workers, authenticated browsers, c
 | Scout | Fetches up to five user-supplied public URLs, blocks private-network targets, extracts evidence, and returns citations | Search provider, authenticated browser, broader live discovery |
 | Commerce | Validates source-linked crypto offers and enforces offer → exact approval → invoice → confirmed payment → verified order-receipt state transitions | First authorized physical-product merchant adapter, authenticated checkout, shipping/refund recovery |
 | Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
-| Flow | Prepares an exact Monad Testnet MON transfer, requests the user's browser wallet, and verifies the mined receipt server-side | Deployed policy vault, ERC-20 support, replacement/dropped-transaction recovery |
+| Flow | Routes an exact `send X MON to 0x…` request from unified chat, requests the user's browser wallet, checkpoints the submitted hash, and verifies the mined receipt server-side | Deployed policy vault, ERC-20 and DEX swap support, replacement/dropped-transaction recovery |
 | Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
 | Sentinel | Performs bytecode triage and enforces Flow network, sender, recipient, asset, and amount policy checks | Deployed-vault state, merchant/domain policy, prompt-injection controls |
 
@@ -41,6 +57,8 @@ Six specialists exist. The planned ten-bot catalog is intentionally incomplete: 
 
 A Monad transfer is complete only when the configured RPC proves it is on the expected chain, the user approves the exact intent in their wallet, and DONADS verifies the successful mined receipt, sender, recipient, amount, block, and absence of calldata.
 
+The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for testing`. Financial values bypass the language model and are parsed deterministically. Flow then exposes the exact intent in the conversation. Its lifecycle is `awaiting approval → authorized → submitted → confirmed`; the submitted transaction hash is checkpointed server-side and temporarily retained in the originating browser so a refresh, slow receipt, or interrupted API call resumes verification instead of broadcasting a duplicate payment.
+
 A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
 
 ## Wallet and payment model
@@ -48,6 +66,8 @@ A commerce task is complete only when an authorized merchant integration returns
 DONADS agents do **not** currently own wallets, private keys, or independent funds. Wallet sign-in proves task ownership but cannot move money. For a payment, Flow creates an exact intent containing the Monad network, payer, recipient, asset, and amount. Sentinel validates that intent, the browser wallet shows the final transaction for explicit user approval, and the wallet signs and broadcasts it. DONADS then reads the transaction from Monad RPC and records completion only after the receipt and exact values match.
 
 Operator can coordinate Flow or Commerce, but it cannot sign on their behalf. Its permission model explicitly disables signing and fund movement. The policy-vault contract is the future bounded-autonomy path: a user may fund a smart-contract vault and delegate a revocable session address with recipient, per-transaction, daily, expiry, and replay limits. That vault must be deployed, audited, funded, and approved on testnet before any agent-like automated payment is enabled.
+
+Chat-directed swaps and autonomous session-key spending remain disabled. The planned Flow swap adapter must use approved Monad Testnet DEX contracts, deterministic quote and calldata construction, token/router/function allowlists, limited approvals, minimum output, slippage and price-impact limits, simulation, explicit wallet confirmation, and post-transaction balance verification before it can report a trade as complete.
 
 Commerce adds merchant evidence around the payment: verified offer → exact user approval → merchant invoice → wallet payment → Monad receipt → merchant order receipt. Without both the chain receipt and merchant order receipt, the product remains unordered.
 

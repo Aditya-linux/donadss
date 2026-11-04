@@ -124,19 +124,39 @@ async function rpc(method: string, params: unknown[]): Promise<unknown> {
   return payload.result;
 }
 
+async function recordFlowSubmission(ownerId: string, id: string, request: Request): Promise<Response> {
+  const task = await ownedTask(ownerId, id) as FlowCompletedTask;
+  if (task.bot !== "flow" || task.status.state !== "completed") throw new Error("Flow task not found.");
+  const payload = await body(request);
+  const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash.toLowerCase() : "";
+  if (!/^0x[0-9a-f]{64}$/.test(hash)) throw new Error("A valid transaction hash is required.");
+  const workflow = task.status.data.workflow;
+  if (workflow.state === "submitted" && workflow.submission?.transaction_hash === hash) return json(task);
+  if (workflow.state !== "authorized") throw new Error("The exact transfer must be authorized before recording a wallet submission.");
+  workflow.state = "submitted";
+  workflow.submission = { transaction_hash: hash, submitted_at_ms: Date.now() };
+  workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_submitted", detail: "Wallet returned a transaction hash; receipt verification is pending.", at_ms: Date.now() });
+  task.status.summary = "Flow recorded the wallet submission and is waiting for a matching Monad receipt.";
+  task.updated_at_ms = Date.now();
+  task.events.push(taskEvent(task.events, "transaction_submitted", task.status.summary));
+  await updateTask(task);
+  return json(task);
+}
+
 async function confirmFlow(ownerId: string, id: string, request: Request): Promise<Response> {
   const task = await ownedTask(ownerId, id) as FlowCompletedTask;
   if (task.bot !== "flow" || task.status.state !== "completed") throw new Error("Flow task not found.");
   const payload = await body(request);
-  const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash : "";
+  const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash.toLowerCase() : "";
   if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("A valid transaction hash is required.");
+  const workflow = task.status.data.workflow;
+  if (workflow.state === "confirmed" && workflow.execution?.transaction_hash === hash) return json(task);
+  if (workflow.state !== "submitted" || workflow.submission?.transaction_hash !== hash) throw new Error("Transaction hash does not match the recorded wallet submission.");
   const transaction = await rpc("eth_getTransactionByHash", [hash]) as Record<string, string> | null;
   const receipt = await rpc("eth_getTransactionReceipt", [hash]) as Record<string, string> | null;
   if (!transaction || !receipt?.blockNumber) throw new Error("Transaction has not been mined yet.");
   if (receipt.status !== "0x1") throw new Error("Monad receipt reports a reverted transaction.");
-  const workflow = task.status.data.workflow;
   const payout = workflow.payouts[0];
-  if (workflow.state !== "authorized") throw new Error("The exact transfer must be authorized before confirmation.");
   if (transaction.from?.toLowerCase() !== workflow.payer || transaction.to?.toLowerCase() !== payout.recipient_address || BigInt(transaction.value) !== monToWei(payout.amount) || !["0x", "0x0", undefined].includes(transaction.input)) throw new Error("Mined transaction does not match the approved sender, recipient, amount, or calldata policy.");
   workflow.state = "confirmed";
   workflow.execution = { transaction_hash: hash.toLowerCase(), block_number: Number(BigInt(receipt.blockNumber)), confirmed_at_ms: Date.now() };
@@ -228,6 +248,7 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (segments[0] === "tasks" && segments.length === 2 && method === "GET") return json(await ownedTask(ownerId, segments[1]));
   if (segments[0] === "tasks" && segments[2] === "commerce-actions" && method === "POST") return commerceAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-actions" && method === "POST") return flowAction(ownerId, segments[1], request);
+  if (segments[0] === "tasks" && segments[2] === "flow-submission" && method === "POST") return recordFlowSubmission(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-transaction" && method === "POST") return confirmFlow(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "operator-actions" && method === "POST") return operatorAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "feedback" && method === "POST") {

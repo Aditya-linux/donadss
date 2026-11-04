@@ -24,6 +24,7 @@ describe("Vercel specialist execution", () => {
     expect(result.state).toBe("completed");
     if (result.state !== "completed" || !("workflow" in result.data) || !("execution_available" in result.data)) throw new Error("Unexpected Flow result.");
     expect(result.data.workflow.state).toBe("awaiting_approval");
+    expect("submission" in result.data.workflow ? result.data.workflow.submission : undefined).toBeNull();
     expect(result.data.execution_available).toBe(false);
     expect(monToWei("0.25")).toBe(BigInt("250000000000000000"));
   });

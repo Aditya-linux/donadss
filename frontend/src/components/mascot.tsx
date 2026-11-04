@@ -1,43 +1,66 @@
 "use client";
 
 import Image from "next/image";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-const MASCOT_LOGO = "/brand/donads-mascot.jpeg";
+export const MASCOT_TILE = "/brand/donads-mascot-tile.png";
+export const MASCOT_HEAD = "/brand/donads-mascot-head.png";
 const MASCOT_TIMING = {
   cycleMs: 1_950,
 } as const;
 
 export function Mascot({ size = 96 }: { size?: number }) {
   return (
-    <div
-      className="overflow-hidden rounded-[1.75rem] border border-border bg-card shadow-sm"
-      style={{ width: size, height: size }}
-    >
-      <Image
-        src={MASCOT_LOGO}
-        alt="DONADS robot mascot"
-        width={size}
-        height={size}
-        priority
-        sizes={`${size}px`}
-        className="size-full object-cover"
-      />
-    </div>
+    <Image
+      src={MASCOT_HEAD}
+      alt="DONADS robot mascot"
+      width={size}
+      height={Math.round(size * 0.762)}
+      priority
+      sizes={`${size}px`}
+      className="h-auto object-contain drop-shadow-sm"
+    />
   );
 }
 
 export function MascotMark({ size = 32 }: { size?: number }) {
   return (
     <Image
-      src={MASCOT_LOGO}
+      src={MASCOT_TILE}
       alt=""
       aria-hidden="true"
       width={size}
       height={size}
       sizes={`${size}px`}
-      className="rounded-lg object-cover"
+      className="rounded-[28%] object-cover"
     />
+  );
+}
+
+export function SpecialistMark({
+  icon: Icon,
+  size = 40,
+}: {
+  icon: LucideIcon;
+  size?: number;
+}) {
+  const badgeSize = Math.max(16, Math.round(size * 0.45));
+  const iconSize = Math.max(9, Math.round(badgeSize * 0.56));
+  return (
+    <span
+      className="relative block shrink-0"
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    >
+      <MascotMark size={size} />
+      <span
+        className="absolute -bottom-1 -right-1 grid place-items-center rounded-full border-2 border-card bg-primary text-primary-foreground shadow-sm"
+        style={{ width: badgeSize, height: badgeSize }}
+      >
+        <Icon style={{ width: iconSize, height: iconSize }} strokeWidth={2} />
+      </span>
+    </span>
   );
 }
 

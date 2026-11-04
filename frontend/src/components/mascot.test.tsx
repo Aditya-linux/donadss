@@ -1,14 +1,25 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Mascot, MascotLoader } from "./mascot";
+import { Mascot, MascotLoader, MascotMark } from "./mascot";
 
 describe("DONADS mascot", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps the approved mascot as meaningful product artwork", () => {
     render(<Mascot />);
-    expect(screen.getByAltText("DONADS robot mascot")).toBeInTheDocument();
+    expect(screen.getByAltText("DONADS robot mascot")).toHaveAttribute(
+      "src",
+      expect.stringContaining("donads-mascot-head.png"),
+    );
+  });
+
+  it("uses the brown-tile mascot for compact product marks", () => {
+    const { container } = render(<MascotMark />);
+    expect(container.querySelector("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining("donads-mascot-tile.png"),
+    );
   });
 
   it("shows specific progress and remains still for reduced-motion users", () => {

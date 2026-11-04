@@ -15,6 +15,8 @@ export type ScoutSource = {
   error: string | null;
 };
 
+export type AiAttachmentInput = { name: string; mime_type: string; data: string };
+
 export type ScoutReport = {
   title: string;
   findings: ScoutFinding[];
@@ -366,6 +368,26 @@ export async function getWalletBalance(): Promise<WalletBalance> {
   return readJson(response);
 }
 
+export type AiUsage = {
+  configured: boolean;
+  provider: "gemini";
+  model: string;
+  used_today: number;
+  remaining_today: number;
+  resets_at_ms: number;
+  limits: typeof import("@/lib/ai-policy").DONADS_AI_POLICY;
+};
+
+export async function getAiUsage(): Promise<AiUsage> {
+  const response = await apiFetch(`${API_URL}/v1/ai/usage`);
+  return readJson(response);
+}
+
+export async function planAiTask(prompt: string, attachments: AiAttachmentInput[] = []): Promise<{ plan: import("@/lib/task-planner").UnifiedPlan; mode: "model" | "deterministic"; fallback_reason: string | null }> {
+  const response = await apiFetch(`${API_URL}/v1/ai/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, attachments }) });
+  return readJson(response);
+}
+
 export async function createAuthChallenge(address: string): Promise<{ message: string }> {
   const response = await globalThis.fetch(`${API_URL}/v1/auth/challenge`, {
     method: "POST",
@@ -438,12 +460,14 @@ async function readJson<T>(response: Response): Promise<T> {
 export async function createScoutTask(
   prompt: string,
   signal?: AbortSignal,
+  attachments: AiAttachmentInput[] = [],
 ): Promise<Task> {
-  const sources = extractSourceUrls(prompt);
+  let sources: string[] = [];
+  try { sources = extractSourceUrls(prompt); } catch (error) { if (!attachments.length) throw error; }
   const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, bot: "scout", input: { sources } }),
+    body: JSON.stringify({ prompt, bot: "scout", input: { sources, attachments } }),
     signal,
   });
   return readJson<Task>(response);

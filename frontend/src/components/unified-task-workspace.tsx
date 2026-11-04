@@ -13,10 +13,12 @@ import {
   createScoutTask,
   createSentinelTask,
   type CompletedTask,
+  type AiAttachmentInput,
   type OperatorStepInput,
   type Task,
   waitForOperator,
   waitForTask,
+  planAiTask,
 } from "@/lib/donads-api";
 import { planUnifiedTask } from "@/lib/task-planner";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
@@ -53,7 +55,11 @@ function historyMessages(task: Task | null): Message[] {
   ];
 }
 
-export function UnifiedTaskWorkspace({ signedIn, initialTask = null, onTaskCompleted }: { signedIn: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
+function fileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
+}
+
+export function UnifiedTaskWorkspace({ signedIn, aiConfigured = false, initialTask = null, onTaskCompleted }: { signedIn: boolean; aiConfigured?: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -98,27 +104,28 @@ export function UnifiedTaskWorkspace({ signedIn, initialTask = null, onTaskCompl
     setAttachmentError(null);
   }
 
-  async function execute(value: string) {
-    const plan = planUnifiedTask(value);
-    if (plan.kind === "clarify") {
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: plan.message }]);
-      return;
-    }
+  async function execute(value: string, modelAttachments: AiAttachmentInput[] = []) {
+    let plan = planUnifiedTask(value);
     if (!signedIn) {
+      if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: "Connect and sign in with your wallet first. This binds the task history and approvals to you." }]);
       return;
     }
 
     setWorking(true);
+    setProgress("Operator is understanding the goal…");
     setError(null);
     controller.current?.abort();
     controller.current = new AbortController();
     const signal = controller.current.signal;
     try {
+      plan = (await planAiTask(value, modelAttachments)).plan;
+      onTaskCompleted?.();
+      if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
       let completed: CompletedTask;
       if (plan.kind === "scout") {
         setProgress("Scout is reading and citing the supplied sources…");
-        const queued = await createScoutTask(plan.prompt, signal);
+        const queued = await createScoutTask(plan.prompt, signal, modelAttachments);
         completed = await waitForTask(queued.id, (task) => setProgress(task.events.at(-1)?.message ?? "Scout is verifying the evidence…"), signal);
       } else if (plan.kind === "sentinel") {
         setProgress("Sentinel is triaging the bytecode…");
@@ -173,21 +180,24 @@ export function UnifiedTaskWorkspace({ signedIn, initialTask = null, onTaskCompl
     }
   }
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const value = prompt.trim();
     if (!value || working) return;
     const unsupported = attachments.filter((attachment) => attachment.textContent === null);
-    if (unsupported.length) {
+    if (unsupported.length && !aiConfigured) {
       setAttachmentError(`${unsupported.map((attachment) => attachment.file.name).join(", ")} can be selected and previewed, but image, PDF, and binary analysis needs the upcoming multimodal model API. Attach text or code for processing now.`);
       return;
     }
     const attachmentText = attachments.map((attachment) => `\n\nAttached text file: ${attachment.file.name}\n---\n${attachment.textContent}`).join("");
     const displayText = attachments.length ? `${value}\n\nAttached: ${attachments.map((attachment) => attachment.file.name).join(", ")}` : value;
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: displayText }]);
-    setPrompt("");
-    setAttachments([]);
-    void execute(`${value}${attachmentText}`);
+    try {
+      const modelAttachments = await Promise.all(unsupported.map(async (attachment) => ({ name: attachment.file.name, mime_type: attachment.file.type || "application/octet-stream", data: await fileAsBase64(attachment.file) })));
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: displayText }]);
+      setPrompt("");
+      setAttachments([]);
+      void execute(`${value}${attachmentText}`, modelAttachments);
+    } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : "Could not read the selected files."); }
   }
 
   return (

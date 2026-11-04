@@ -13,6 +13,7 @@ import type {
   ScoutCompletedTask,
   SentinelCompletedTask,
 } from "@/lib/donads-api";
+import { generateGeminiJson } from "@/server/gemini";
 
 type RecordValue = Record<string, unknown>;
 type CompletedStatus =
@@ -109,9 +110,14 @@ async function fetchPublicSource(source: string): Promise<{ url: string; title: 
   throw new Error("Source could not be fetched.");
 }
 
-async function scout(input: unknown, started: number): Promise<ScoutCompletedTask["status"]> {
-  const sources = stringArray(object(input).sources, "sources").slice(0, 5);
-  if (!sources.length) throw new Error("Scout requires at least one public source URL.");
+async function scout(input: unknown, started: number, ownerId?: string): Promise<ScoutCompletedTask["status"]> {
+  const scoutInput = object(input);
+  const sources = stringArray(scoutInput.sources ?? [], "sources").slice(0, 5);
+  const attachments = Array.isArray(scoutInput.attachments) ? scoutInput.attachments.map((value) => {
+    const item = object(value, "attachment");
+    return { name: text(item.name, "attachment.name"), mimeType: text(item.mime_type, "attachment.mime_type"), data: text(item.data, "attachment.data") };
+  }) : [];
+  if (!sources.length && !attachments.length) throw new Error("Scout requires a public source URL or an AI-readable attachment.");
   const reportSources: ScoutCompletedTask["status"]["data"]["report"]["sources"] = [];
   const findings: ScoutCompletedTask["status"]["data"]["report"]["findings"] = [];
   await Promise.all(sources.map(async (source, index) => {
@@ -123,7 +129,23 @@ async function scout(input: unknown, started: number): Promise<ScoutCompletedTas
       reportSources[index] = { id: index + 1, title: "Source unavailable", url: source, status: "failed", error: cause instanceof Error ? cause.message : "Fetch failed." };
     }
   }));
-  const validFindings = findings.filter(Boolean);
+  attachments.forEach((attachment, index) => { reportSources.push({ id: sources.length + index + 1, title: attachment.name, url: `attachment:${encodeURIComponent(attachment.name)}`, status: "fetched", error: null }); });
+  let validFindings = findings.filter(Boolean);
+  if (ownerId && (validFindings.length || attachments.length)) {
+    try {
+      const enhanced = await generateGeminiJson<{ findings: Array<{ text: string; citations: number[] }> }>({
+        ownerId,
+        system: "Summarize only the supplied source excerpts. Every finding must cite one or more valid source IDs. Do not add outside facts, URLs, or unsupported claims.",
+        prompt: JSON.stringify(reportSources.map((source, index) => ({ id: source.id, title: source.title, excerpt: findings[index]?.text ?? "Analyze the attached file and cite this source ID." }))),
+        schema: { type: "object", properties: { findings: { type: "array", items: { type: "object", properties: { text: { type: "string" }, citations: { type: "array", items: { type: "integer" } } }, required: ["text", "citations"], additionalProperties: false } } }, required: ["findings"], additionalProperties: false },
+        attachments,
+      });
+      const validIds = new Set(reportSources.filter((source) => source.status === "fetched").map((source) => source.id));
+      const checked = enhanced?.findings.filter((finding) => finding.text.trim() && finding.citations.length && finding.citations.every((id) => validIds.has(id)));
+      if (checked?.length) validFindings = checked;
+    } catch { /* Deterministic cited excerpts remain the fail-closed fallback. */ }
+  }
+  if (!validFindings.length && attachments.length) throw new Error("Scout could not analyze the attachment. Check the Gemini key, quota, and file format, then retry.");
   return { state: "completed", summary: `Scout reviewed ${reportSources.filter((source) => source.status === "fetched").length}/${sources.length} supplied sources and produced ${validFindings.length} cited finding(s).`, data: { report: { title: "Source-linked research report", findings: validFindings, sources: reportSources, limitations: "Scout summarizes only the supplied public sources. Verify important claims in the originals." }, agent_version: "scout-vercel-v1", read_only: true }, latency_ms: Date.now() - started };
 }
 
@@ -134,7 +156,7 @@ function addDays(date: string, days: number): string {
   return value.toISOString().slice(0, 10);
 }
 
-function growth(input: unknown, started: number): GrowthCompletedTask["status"] {
+async function growth(input: unknown, started: number, ownerId?: string): Promise<GrowthCompletedTask["status"]> {
   const data = object(input);
   const profile = object(data.profile, "profile");
   const project = text(profile.project_name, "profile.project_name");
@@ -153,6 +175,17 @@ function growth(input: unknown, started: number): GrowthCompletedTask["status"] 
     const pillar = pillars[index % pillars.length];
     return { day: index + 1, date: addDays(startDate, index), platform, format: platform === "email" ? "Email brief" : "Short post", objective: index === 0 ? "Introduce the objective" : "Build evidence and understanding", draft: `${project}: ${pillar}. ${objective}. Built for ${audience}.`, call_to_action: "Review the cited material and share feedback.", visual_asset: `One ${tone} product visual for ${platform}.`, status: "draft" as const, evidence_urls: approvedLinks };
   });
+  if (ownerId) {
+    try {
+      const enhanced = await generateGeminiJson<{ drafts: Array<{ day: number; draft: string; call_to_action: string }> }>({
+        ownerId,
+        system: "Improve campaign drafts using only the supplied brief. Preserve each day number. Return reviewable drafts only; never claim publishing, transactions, endorsements, or unverifiable results. Avoid prohibited terms.",
+        prompt: JSON.stringify({ project, objective, audience, tone, pillars, prohibited_terms: profile.prohibited_terms ?? [], calendar }),
+        schema: { type: "object", properties: { drafts: { type: "array", maxItems: duration, items: { type: "object", properties: { day: { type: "integer" }, draft: { type: "string" }, call_to_action: { type: "string" } }, required: ["day", "draft", "call_to_action"], additionalProperties: false } } }, required: ["drafts"], additionalProperties: false },
+      });
+      for (const draft of enhanced?.drafts ?? []) { const target = calendar.find((item) => item.day === draft.day); if (target && draft.draft.trim()) { target.draft = draft.draft.trim(); target.call_to_action = draft.call_to_action.trim() || target.call_to_action; } }
+    } catch { /* Template drafts remain available when the model is unavailable. */ }
+  }
   return { state: "completed", summary: `Growth prepared ${calendar.length} reviewable draft(s); no content was published.`, data: { campaign: { project_name: project, objective, target_audience: audience, tone, message_pillars: pillars, calendar, required_asset_count: calendar.length, restrictions_applied: stringArray(profile.prohibited_terms ?? [], "profile.prohibited_terms"), status: "draft", publishing: "disabled" }, agent_version: "growth-vercel-v1", external_actions: false }, latency_ms: Date.now() - started };
 }
 
@@ -209,11 +242,11 @@ function operator(input: unknown, started: number): OperatorCompletedTask["statu
   return { state: "completed", summary: `Operator prepared ${workflow.steps.length} dependency-validated step(s).`, data: { workflow, agent_version: "operator-orchestration-v2", external_actions: false }, latency_ms: Date.now() - started };
 }
 
-export async function executeBot(bot: string, input: unknown): Promise<CompletedStatus> {
+export async function executeBot(bot: string, input: unknown, ownerId?: string): Promise<CompletedStatus> {
   const started = Date.now();
   switch (bot) {
-    case "scout": return scout(input, started);
-    case "growth": return growth(input, started);
+    case "scout": return scout(input, started, ownerId);
+    case "growth": return growth(input, started, ownerId);
     case "flow": return flow(input, started);
     case "commerce": return commerce(input, started);
     case "operator": return operator(input, started);

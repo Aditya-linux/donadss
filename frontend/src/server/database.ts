@@ -156,7 +156,15 @@ export async function recordAiUsage(input: { requestId: string; ownerId: string;
   const db = sql();
   await db`INSERT INTO donads_ai_usage(request_id, owner_id, provider, model, input_tokens, output_tokens, status, created_at_ms)
     VALUES (${input.requestId}, ${input.ownerId}, ${input.provider}, ${input.model}, ${input.inputTokens}, ${input.outputTokens}, ${input.status}, ${Date.now()})
-    ON CONFLICT(request_id) DO NOTHING`;
+    ON CONFLICT(request_id) DO UPDATE SET input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens, status = EXCLUDED.status`;
+}
+
+export async function getAiUsageSince(ownerId: string, sinceMs: number): Promise<number> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT COUNT(*)::int AS requests FROM donads_ai_usage
+    WHERE owner_id = ${ownerId} AND created_at_ms >= ${sinceMs}` as Array<{ requests: number }>;
+  return Number(rows[0]?.requests ?? 0);
 }
 
 export async function createSession(token: string, ownerId: string, expiresAtMs: number) {

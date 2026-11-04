@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import { formatEther } from "viem";
+import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 
 import type {
   BrandProfile,
@@ -15,6 +16,7 @@ import { authenticate, createChallenge, logout, SESSION_COOKIE, verifyChallenge 
 import { monToWei } from "@/server/bots";
 import {
   getProfile,
+  getAiUsageSince,
   getRoutine,
   getTask,
   listRoutines,
@@ -23,6 +25,8 @@ import {
   putRoutine,
   updateTask,
 } from "@/server/database";
+import { geminiConfigured } from "@/server/gemini";
+import { planTask } from "@/server/ai-planner";
 import { taskEvent } from "@/server/donads-types";
 import { createAndExecuteTask } from "@/server/tasks";
 import { operatorWorkflow } from "@/workflows/operator";
@@ -194,6 +198,30 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (method === "GET" && segments.join("/") === "wallet/balance") {
     const value = String(await rpc("eth_getBalance", [ownerId, "latest"]));
     return json({ address: ownerId, chain_id: 10143, network: "Monad Testnet", symbol: "MON", balance_atomic: BigInt(value).toString(), balance_mon: formatEther(BigInt(value)) });
+  }
+  if (method === "GET" && segments.join("/") === "ai/usage") {
+    const now = new Date();
+    const resetAtMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const used = await getAiUsageSince(ownerId, resetAtMs - 24 * 60 * 60 * 1_000);
+    return json({
+      configured: geminiConfigured(), provider: "gemini", model: process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+      used_today: used, remaining_today: Math.max(0, DONADS_AI_POLICY.requestsPerDayPerWallet - used), resets_at_ms: resetAtMs,
+      limits: DONADS_AI_POLICY,
+    });
+  }
+  if (method === "POST" && segments.join("/") === "ai/plan") {
+    const payload = await body(request);
+    const prompt = String(payload.prompt ?? "").trim();
+    if (!prompt) throw new Error("A task prompt is required.");
+    const attachments = Array.isArray(payload.attachments) ? payload.attachments.map((value) => {
+      if (!value || typeof value !== "object") throw new Error("Invalid AI attachment.");
+      const item = value as Record<string, unknown>; const data = String(item.data ?? ""); const mimeType = String(item.mime_type ?? "");
+      if (!/^image\//.test(mimeType) && mimeType !== "application/pdf") throw new Error("Gemini attachments must be images or PDFs.");
+      if (Buffer.byteLength(data, "base64") > DONADS_AI_POLICY.maxAttachmentBytes) throw new Error("An attachment exceeds the 10 MB limit.");
+      return { name: String(item.name ?? "attachment"), mimeType, data };
+    }) : [];
+    if (attachments.length > DONADS_AI_POLICY.maxAttachmentsPerTask) throw new Error("A task accepts up to 5 attachments.");
+    return json(await planTask(ownerId, prompt, attachments));
   }
   if (segments[0] === "tasks" && segments.length === 1 && method === "POST") return json(await createAndExecuteTask(ownerId, await body(request)), 201);
   if (segments[0] === "tasks" && segments.length === 1 && method === "GET") return json(await listTasks(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));

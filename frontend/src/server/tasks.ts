@@ -5,6 +5,17 @@ import { executeBot } from "@/server/bots";
 import { insertTask, updateTask } from "@/server/database";
 import { taskEvent } from "@/server/donads-types";
 
+function persistedInput(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  if (!Array.isArray(input.attachments)) return input;
+  return { ...input, attachments: input.attachments.map((attachment) => {
+    if (!attachment || typeof attachment !== "object") return { name: "attachment" };
+    const item = attachment as Record<string, unknown>;
+    return { name: String(item.name ?? "attachment"), mime_type: String(item.mime_type ?? "application/octet-stream"), data_redacted: true };
+  }) };
+}
+
 export async function createAndExecuteTask(
   ownerId: string,
   payload: Record<string, unknown>,
@@ -14,14 +25,15 @@ export async function createAndExecuteTask(
   if (!prompt) throw new Error("prompt is required.");
   if (!bot) throw new Error("bot is required.");
   const now = Date.now();
+  const executionInput = payload.input ?? {};
   const task = {
-    id: randomUUID(), owner_id: ownerId, prompt, bot, input: payload.input ?? {},
+    id: randomUUID(), owner_id: ownerId, prompt, bot, input: persistedInput(executionInput),
     events: [{ sequence: 1, kind: "queued", message: `${bot} task accepted.`, at_ms: now }],
     created_at_ms: now, updated_at_ms: now, feedback: null, status: { state: "running" as const },
   } as Task;
   await insertTask(task);
   try {
-    task.status = await executeBot(bot, task.input) as Task["status"];
+    task.status = await executeBot(bot, executionInput, ownerId) as Task["status"];
     task.updated_at_ms = Date.now();
     task.events.push(taskEvent(task.events, "completed", task.status.state === "completed" ? task.status.summary : "Task completed."));
   } catch (cause) {

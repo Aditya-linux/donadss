@@ -36,6 +36,8 @@ const restored = await request("/api/v1/auth/session", { headers: { cookie: sess
 assert(restored.response.ok && restored.payload.owner_id === account.address.toLowerCase(), "Wallet session did not restore from its secure cookie.");
 const balance = await request("/api/v1/wallet/balance", {}, token);
 assert(balance.response.ok && balance.payload.chain_id === 10143 && balance.payload.symbol === "MON", "Monad Testnet balance endpoint failed.");
+const aiUsage = await request("/api/v1/ai/usage", {}, token);
+assert(aiUsage.response.ok && aiUsage.payload.remaining_today >= 0 && aiUsage.payload.remaining_today <= 30, "AI usage endpoint failed.");
 
 const created = await request("/api/v1/tasks", {
   method: "POST",
@@ -139,4 +141,6 @@ console.log(JSON.stringify({
   revoked_session_status: revoked.response.status,
   restored_session: true,
   balance_network: balance.payload.network,
+  ai_remaining_today: aiUsage.payload.remaining_today,
+  ai_configured: aiUsage.payload.configured,
 }, null, 2));

@@ -113,6 +113,8 @@ The model gateway is not active until an approved provider key is configured. Wh
 
 The canonical values live in `frontend/src/lib/ai-policy.ts`. Server-side database leases and wallet-scoped counters enforce concurrency and request quotas; browser checks are usability aids, not the security boundary.
 
+The Gemini gateway is provider-ready and remains disabled while `GEMINI_API_KEY` is empty. `GEMINI_MODEL` defaults to the stable `gemini-2.5-flash` identifier and can be changed without altering specialist code. When configured, Gemini produces schema-constrained routing, cited Scout summaries, Growth draft improvements, and image/PDF understanding. Missing keys, exhausted quota, timeouts, and provider failures fall back to the deterministic specialists. Sentinel, Flow, Commerce policy, transaction validation, and all signing remain outside model authority.
+
 ## Local setup
 
 Requirements: Node.js, npm, a Postgres connection string, and a free Reown project ID. WalletConnect supports mobile/QR wallets; an injected EVM browser wallet is the fallback when Reown is not configured. Rust is optional unless running the reference implementation tests.

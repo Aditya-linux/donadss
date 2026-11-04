@@ -5,7 +5,16 @@ import { pendingApprovalForTask } from "@/lib/approvals";
 import { deletePushSubscription, listPushSubscriptions } from "@/server/database";
 
 export function pushConfigured(): boolean {
-  return Boolean(process.env.VAPID_PUBLIC_KEY?.trim() && process.env.VAPID_PRIVATE_KEY?.trim() && process.env.VAPID_SUBJECT?.trim());
+  const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
+  const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
+  const subject = process.env.VAPID_SUBJECT?.trim();
+  if (!publicKey || !privateKey || !subject || !/^(mailto:|https:\/\/)/i.test(subject)) return false;
+  try {
+    const decoded = Buffer.from(publicKey.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+    return decoded.length === 65 && decoded[0] === 4;
+  } catch {
+    return false;
+  }
 }
 
 export function publicVapidKey(): string | null {

@@ -550,7 +550,7 @@ export async function createScoutTask(
   const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, bot: "scout", input: { sources, attachments, ...(options?.escrowAddress ? { escrow_address: options.escrowAddress } : {}) } }),
+    body: JSON.stringify({ prompt, bot: "scout", input: { query: prompt, sources, attachments, ...(options?.escrowAddress ? { escrow_address: options.escrowAddress } : {}) } }),
     signal,
   });
   return readJson<Task>(response);

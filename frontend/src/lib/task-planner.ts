@@ -19,6 +19,20 @@ function urlsIn(value: string): string[] {
   return [...new Set(value.match(/https?:\/\/[^\s<>"']+/gi)?.map((url) => url.replace(/[),.;!?]+$/g, "")) ?? [])];
 }
 
+const MONAD_DEVELOPER_SOURCES = {
+  overview: "https://docs.monad.xyz/introduction/monad-for-developers",
+  network: "https://docs.monad.xyz/developer-essentials/network-information",
+  rpc: "https://docs.monad.xyz/reference/json-rpc/api",
+} as const;
+
+function monadDeveloperResearchPrompt(prompt: string): string | null {
+  if (!/\bmonad\b/i.test(prompt) || !/(?:\bwhat\b|\bwhy\b|\bhow\b|\bexplain\b|\bresearch\b|\bsummari[sz]e\b|\bdocs?\b|\bdeveloper\b|\brpc\b|\bnetwork\b|\bchain\b|\barchitecture\b|\bgas\b|\bblock\b|\bfinality\b|\bthroughput\b|\btestnet\b|\bmainnet\b)/i.test(prompt)) return null;
+  const sources: string[] = [MONAD_DEVELOPER_SOURCES.overview];
+  if (/\b(?:network|chain|testnet|mainnet|block|gas|token|explorer)\b/i.test(prompt)) sources.push(MONAD_DEVELOPER_SOURCES.network);
+  if (/\b(?:api|rpc|method|developer|transaction|receipt|log|event|websocket)\b/i.test(prompt)) sources.push(MONAD_DEVELOPER_SOURCES.rpc);
+  return `${prompt}\n\nUse these official Monad developer sources as primary evidence:\n${[...new Set(sources)].join("\n")}`;
+}
+
 export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const prompt = rawPrompt.trim();
   const lower = prompt.toLowerCase();
@@ -38,6 +52,7 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const revokeSession = prompt.match(/\brevoke\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})/i);
   const escrowAddress = prompt.match(/\bescrow\s+(0x[0-9a-fA-F]{40})\b/i)?.[1];
   const verifyEscrow = prompt.match(/\bverify\s+escrow\s+(0x[0-9a-fA-F]{40})\s+with\s+deliverable\s+(https?:\/\/[^\s<>"']+)/i);
+  const monadResearchPrompt = urls.length ? null : monadDeveloperResearchPrompt(prompt);
 
   if (!prompt) return { kind: "clarify", message: "Describe the outcome you want DONADS to complete." };
   if (/\bdeploy\s+(?:my\s+)?policy\s+vault\b/i.test(prompt)) return { kind: "vault_deploy" };
@@ -57,6 +72,7 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const isCampaign = /(campaign|marketing|launch|content|posts?|growth|social)/i.test(prompt);
   if (isCampaign && urls.length) return { kind: "operator", objective: prompt, sources: urls.slice(0, 5) };
   if (isCampaign) return { kind: "growth", objective: prompt };
+  if (monadResearchPrompt) return { kind: "scout", prompt: monadResearchPrompt };
   if (urls.length || /(research|compare|investigate|summari[sz]e|find out)/i.test(prompt)) {
     if (!urls.length) return { kind: "clarify", message: "Add at least one public source URL so Scout can produce cited, verifiable research." };
     return { kind: "scout", prompt };

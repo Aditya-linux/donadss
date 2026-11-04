@@ -175,6 +175,7 @@ async function prepareDeliverableVerification(args: {
 
 async function scout(input: unknown, started: number, ownerId?: string): Promise<ScoutCompletedTask["status"]> {
   const scoutInput = object(input);
+  const query = typeof scoutInput.query === "string" && scoutInput.query.trim() ? scoutInput.query.trim().slice(0, 4_000) : "Identify the most decision-relevant facts in the supplied evidence.";
   const sources = stringArray(scoutInput.sources ?? [], "sources").slice(0, 5);
   const attachments = Array.isArray(scoutInput.attachments) ? scoutInput.attachments.map((value) => {
     const item = object(value, "attachment");
@@ -203,8 +204,8 @@ async function scout(input: unknown, started: number, ownerId?: string): Promise
     try {
       const enhanced = await generateGeminiJson<{ findings: Array<{ text: string; citations: number[] }> }>({
         ownerId,
-        system: "Summarize only the supplied source excerpts. Every finding must cite one or more valid source IDs. Do not add outside facts, URLs, or unsupported claims.",
-        prompt: JSON.stringify(reportSources.map((source, index) => ({ id: source.id, title: source.title, excerpt: findings[index]?.text ?? "Analyze the attached file and cite this source ID." }))),
+        system: "Answer the user's exact question using only the supplied evidence. Return 3-6 non-overlapping, decision-relevant findings when the evidence permits. Start each finding with a direct factual conclusion; preserve concrete names, values, limits, methods, and caveats. Every finding must cite one or more valid source IDs. Never add outside facts or URLs, repeat the request, describe your process, use promotional filler, or return generic advice. If the evidence does not answer part of the question, say exactly what is missing.",
+        prompt: JSON.stringify({ question: query, sources: reportSources.map((source, index) => ({ id: source.id, title: source.title, excerpt: findings[index]?.text ?? "Analyze the attached file and cite this source ID." })) }),
         schema: { type: "object", properties: { findings: { type: "array", items: { type: "object", properties: { text: { type: "string" }, citations: { type: "array", items: { type: "integer" } } }, required: ["text", "citations"], additionalProperties: false } } }, required: ["findings"], additionalProperties: false },
         attachments,
       });

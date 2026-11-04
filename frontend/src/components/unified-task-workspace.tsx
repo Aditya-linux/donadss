@@ -408,7 +408,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         completed = await waitForTask(queued.id, undefined, signal);
       } else {
         setProgress("Operator is selecting Scout and Growth…");
-        const research: OperatorStepInput = { id: "research", title: "Verify source material", bot: "scout", prompt: plan.objective, input: { sources: plan.sources }, depends_on: [] };
+        const research: OperatorStepInput = { id: "research", title: "Verify source material", bot: "scout", prompt: plan.objective, input: { query: plan.objective, sources: plan.sources }, depends_on: [] };
         const campaign: OperatorStepInput = {
           id: "campaign", title: "Create the campaign", bot: "growth", prompt: plan.objective,
           input: {

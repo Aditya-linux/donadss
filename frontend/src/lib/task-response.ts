@@ -14,7 +14,7 @@ export function taskResponseText(task: CompletedTask): string {
     const shield = screen?.passed ? "Shield: Prompt-Injection & Phishing Screened (SHA-256 Verified)" : screen ? "Warning: Indirect Prompt-Injection Attempt Neutralized in Source" : null;
     const verification = task.status.data.deliverableVerification;
     const escrow = verification ? ["", "Escrow deliverable check", `Recommended action: ${verification.recommendedAction}.`, `Evidence hash: ${verification.contentHash ?? "unavailable"}.`, verification.blockedReason ?? `Sentinel verdict: ${verification.sentinelVerdict.verdict}. Review the deterministic checkpoint before signing.`] : [];
-    return [shield, "Here are the key findings:", ...(findings.length ? findings : ["â€¢ No source text was allowed into summarization."]), "", "Sources", ...sources, ...escrow, "", report.limitations].filter((line) => line !== null).join("\n");
+    return [shield, report.title, ...(findings.length ? findings : ["No source text passed verification for a supported answer."]), "", "Evidence", ...sources, ...escrow, "", report.limitations].filter((line) => line !== null).join("\n");
   }
 
   if (task.bot === "growth") {

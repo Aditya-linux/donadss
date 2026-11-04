@@ -5,6 +5,13 @@ describe("planUnifiedTask", () => {
   it("coordinates research and growth for sourced campaigns", () => {
     expect(planUnifiedTask("Research https://example.com and create a launch campaign").kind).toBe("operator");
   });
+  it("routes Monad developer questions to official primary sources", () => {
+    const plan = planUnifiedTask("How does the Monad JSON-RPC API handle transaction receipts?");
+    expect(plan).toMatchObject({ kind: "scout" });
+    if (plan.kind !== "scout") throw new Error("Expected Scout plan");
+    expect(plan.prompt).toContain("https://docs.monad.xyz/reference/json-rpc/api");
+    expect(plan.prompt).toContain("official Monad developer sources");
+  });
   it("routes EVM bytecode scans to Sentinel", () => {
     expect(planUnifiedTask("Scan this contract bytecode 0x6000ff")).toEqual({ kind: "sentinel", bytecode: "0x6000ff" });
   });

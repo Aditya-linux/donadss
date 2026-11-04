@@ -147,6 +147,26 @@ No additional specialist is added without an explicit product decision and accep
 
 ## What works today?
 
+### Strict capability status
+
+DONADS uses evidence-backed status labels. `Built` means the workflow exists and is tested; it does not mean mainnet authorization is enabled.
+
+| Capability | Status | Enforced behavior |
+| --- | --- | --- |
+| Payments | Built on Monad Testnet | Native MON, verified ERC-20 transfers, batches of up to ten recipients, and escrow actions require exact review and wallet signatures. |
+| Research | Built for supplied and official sources | Scout retrieves public sources, preserves URLs and hashes, and returns cited question-specific findings. Monad questions default to official Monad developer documentation; live chain state uses Monad JSON-RPC. |
+| Multi-step jobs | Built | Operator executes dependency-safe specialist waves and persists child-task outcomes. |
+| Phone approvals | Built for Web Push; Telegram code complete, credentials pending | Notifications deep-link to the exact DONADS checkpoint. Neither channel can approve or sign. |
+| Always-on scheduled routines | Not built | Saved routines can be replayed manually. Calendar triggers and durable schedule polling must be implemented before this is labelled built. |
+| Wallet watcher | Partial, not continuous | Sentinel detects phishing links, lookalike domains, unlimited approval calldata and supplied bytecode risks. Continuous wallet/event monitoring is still required. |
+
+For Monad information, DONADS separates two source classes:
+
+- **Live chain state:** official Monad-compatible JSON-RPC methods through the configured Testnet endpoint.
+- **Technical explanations:** primary evidence from `docs.monad.xyz`, including the developer overview, network information and JSON-RPC reference.
+
+Model output cannot replace either source. Scout must cite retrieved evidence, while financial decisions continue through deterministic validation.
+
 ### Wallet and authentication
 
 - Reown/WalletConnect QR flow and injected EVM wallet support.

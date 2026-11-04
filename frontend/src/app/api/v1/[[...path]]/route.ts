@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
+import { formatEther } from "viem";
 
 import type {
   BrandProfile,
@@ -10,7 +11,7 @@ import type {
   OperatorTaskInput,
   Task,
 } from "@/lib/donads-api";
-import { authenticate, createChallenge, logout, verifyChallenge } from "@/server/auth";
+import { authenticate, createChallenge, logout, SESSION_COOKIE, verifyChallenge } from "@/server/auth";
 import { monToWei } from "@/server/bots";
 import {
   getProfile,
@@ -177,11 +178,23 @@ async function route(request: Request, context: Context): Promise<Response> {
   }
   if (method === "POST" && segments.join("/") === "auth/verify") {
     const payload = await body(request);
-    return json(await verifyChallenge(String(payload.address ?? ""), String(payload.signature ?? "") as `0x${string}`));
+    const session = await verifyChallenge(String(payload.address ?? ""), String(payload.signature ?? "") as `0x${string}`);
+    const response = json(session);
+    const secure = (request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "")) === "https";
+    response.headers.append("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(session.access_token)}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
+    return response;
   }
-  if (method === "POST" && segments.join("/") === "auth/logout") { await logout(request); return new Response(null, { status: 204 }); }
+  if (method === "POST" && segments.join("/") === "auth/logout") {
+    await logout(request);
+    return new Response(null, { status: 204, headers: { "Set-Cookie": `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax` } });
+  }
 
   const { ownerId } = await authenticate(request);
+  if (method === "GET" && segments.join("/") === "auth/session") return json({ owner_id: ownerId });
+  if (method === "GET" && segments.join("/") === "wallet/balance") {
+    const value = String(await rpc("eth_getBalance", [ownerId, "latest"]));
+    return json({ address: ownerId, chain_id: 10143, network: "Monad Testnet", symbol: "MON", balance_atomic: BigInt(value).toString(), balance_mon: formatEther(BigInt(value)) });
+  }
   if (segments[0] === "tasks" && segments.length === 1 && method === "POST") return json(await createAndExecuteTask(ownerId, await body(request)), 201);
   if (segments[0] === "tasks" && segments.length === 1 && method === "GET") return json(await listTasks(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
   if (segments[0] === "tasks" && segments.length === 2 && method === "GET") return json(await ownedTask(ownerId, segments[1]));

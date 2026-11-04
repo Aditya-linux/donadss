@@ -6,12 +6,16 @@ import { ChatShell } from "./chat-shell";
 describe("ChatShell", () => {
   afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
-  it("uses one task surface and presents specialists as information", () => {
+  it("uses one task surface and opens informational specialist details", async () => {
+    const user = userEvent.setup();
     render(<ChatShell />);
     expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
     expect(screen.getByLabelText("Ask DONADS to complete a task")).toBeInTheDocument();
     expect(screen.getByText("Scout")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Open Scout specialist/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Learn about Scout" }));
+    expect(screen.getByRole("heading", { name: "Scout" })).toBeInTheDocument();
+    expect(screen.getByText("What it is good at")).toBeInTheDocument();
+    expect(screen.getByText("Questions to ask")).toBeInTheDocument();
   });
 
   it("requires wallet identity before dispatching a real task", async () => {

@@ -55,9 +55,9 @@ Commerce adds merchant evidence around the payment: verified offer → exact use
 
 - Wallet sign-in uses an EIP-4361-shaped, Monad-chain-bound challenge and EIP-191 signature recovery.
 - Challenges expire after five minutes and are single-use; sessions expire after twelve hours.
-- Session tokens remain in browser memory and are stored server-side, not in local storage.
+- Session tokens are stored server-side and restored through a 12-hour `HttpOnly`, `SameSite=Lax` cookie; they are never stored in local storage. Refreshing the page restores the authenticated wallet until expiry or explicit sign-out.
 - Tasks, events, feedback, profiles, routines, payment actions, and orchestration actions are isolated by normalized wallet address.
-- Wallet-scoped task history is available through `GET /v1/tasks` and appears in the recent-task sidebar.
+- Wallet-scoped task history is available through `GET /v1/tasks`; selecting a history item reconstructs its request and verified result in the conversation surface.
 - Sign-in challenges and authenticated sessions are rate limited; API responses include restrictive security headers.
 - Operator child tasks inherit the parent owner; cross-wallet identifiers return `404` without revealing existence.
 - The browser calls a same-origin `/api/v1` API, eliminating cross-origin deployment configuration. Monad chain ID and exact transfer values are revalidated inside transaction confirmation.

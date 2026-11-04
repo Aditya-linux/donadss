@@ -7,6 +7,7 @@ import { consumeChallenge, createSession, getChallenge, putChallenge, revokeSess
 const CHAIN_ID = 10_143;
 const CHALLENGE_TTL_MS = 5 * 60 * 1_000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+export const SESSION_COOKIE = "donads_session";
 
 export function normalizeAddress(value: string): string {
   if (!isAddress(value)) throw new Error("A valid EVM wallet address is required.");
@@ -47,13 +48,22 @@ export async function verifyChallenge(rawAddress: string, signature: `0x${string
   return { access_token: token, owner_id: address, expires_at: new Date(expiresAtMs).toISOString() };
 }
 
-export function bearerToken(request: Request): string | null {
+function cookieToken(request: Request): string | null {
+  const cookies = request.headers.get("cookie") ?? "";
+  for (const part of cookies.split(";")) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === SESSION_COOKIE) return decodeURIComponent(value.join("="));
+  }
+  return null;
+}
+
+export function sessionToken(request: Request): string | null {
   const value = request.headers.get("authorization");
-  return value?.startsWith("Bearer ") ? value.slice(7).trim() : null;
+  return value?.startsWith("Bearer ") ? value.slice(7).trim() : cookieToken(request);
 }
 
 export async function authenticate(request: Request): Promise<{ ownerId: string; token: string }> {
-  const token = bearerToken(request);
+  const token = sessionToken(request);
   if (!token) throw new Error("AUTH_REQUIRED");
   const ownerId = await sessionOwner(token);
   if (!ownerId) throw new Error("AUTH_REQUIRED");
@@ -62,6 +72,6 @@ export async function authenticate(request: Request): Promise<{ ownerId: string;
 }
 
 export async function logout(request: Request): Promise<void> {
-  const token = bearerToken(request);
+  const token = sessionToken(request);
   if (token) await revokeSession(token);
 }

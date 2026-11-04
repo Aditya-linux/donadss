@@ -13,6 +13,7 @@ import {
   createSentinelTask,
   type CompletedTask,
   type OperatorStepInput,
+  type Task,
   waitForOperator,
   waitForTask,
 } from "@/lib/donads-api";
@@ -35,9 +36,19 @@ function resultText(task: CompletedTask): string {
   return task.status.summary;
 }
 
-export function UnifiedTaskWorkspace({ signedIn }: { signedIn: boolean }) {
+function historyMessages(task: Task | null): Message[] {
+  if (!task) return [];
+  const result = task.status.state === "completed" ? task as CompletedTask : null;
+  const text = result ? resultText(result) : task.status.state === "failed" ? `This task failed: ${task.status.error}` : `This task is ${task.status.state}.`;
+  return [
+    { id: `${task.id}-user`, role: "user", text: task.prompt },
+    { id: `${task.id}-assistant`, role: "assistant", text, task: result ?? undefined },
+  ];
+}
+
+export function UnifiedTaskWorkspace({ signedIn, initialTask = null, onTaskCompleted }: { signedIn: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
   const [prompt, setPrompt] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => historyMessages(initialTask));
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState("Understanding the goal…");
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +120,7 @@ export function UnifiedTaskWorkspace({ signedIn }: { signedIn: boolean }) {
         }, signal);
       }
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: resultText(completed), task: completed }]);
+      onTaskCompleted?.();
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
       setError(cause instanceof Error ? cause.message : "The task could not be completed.");

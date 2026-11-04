@@ -351,7 +351,19 @@ export function setAccessToken(token: string | null): void {
 async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-  return globalThis.fetch(input, { ...init, headers });
+  return globalThis.fetch(input, { ...init, headers, credentials: "same-origin" });
+}
+
+export async function restoreWalletSession(): Promise<{ owner_id: string }> {
+  const response = await apiFetch(`${API_URL}/v1/auth/session`);
+  return readJson(response);
+}
+
+export type WalletBalance = { address: string; chain_id: 10143; network: "Monad Testnet"; symbol: "MON"; balance_atomic: string; balance_mon: string };
+
+export async function getWalletBalance(): Promise<WalletBalance> {
+  const response = await apiFetch(`${API_URL}/v1/wallet/balance`);
+  return readJson(response);
 }
 
 export async function createAuthChallenge(address: string): Promise<{ message: string }> {

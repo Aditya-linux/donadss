@@ -29,6 +29,13 @@ const verification = await request("/api/v1/auth/verify", {
 });
 assert(verification.response.ok, `Verification failed: ${JSON.stringify(verification.payload)}`);
 const token = verification.payload.access_token;
+const sessionCookie = verification.response.headers.get("set-cookie");
+assert(sessionCookie?.includes("donads_session="), "Wallet verification did not set a durable session cookie.");
+assert(/HttpOnly/i.test(sessionCookie), "Wallet session cookie is not HttpOnly.");
+const restored = await request("/api/v1/auth/session", { headers: { cookie: sessionCookie } });
+assert(restored.response.ok && restored.payload.owner_id === account.address.toLowerCase(), "Wallet session did not restore from its secure cookie.");
+const balance = await request("/api/v1/wallet/balance", {}, token);
+assert(balance.response.ok && balance.payload.chain_id === 10143 && balance.payload.symbol === "MON", "Monad Testnet balance endpoint failed.");
 
 const created = await request("/api/v1/tasks", {
   method: "POST",
@@ -130,4 +137,6 @@ console.log(JSON.stringify({
   history_contains_task: true,
   logout_status: logout.response.status,
   revoked_session_status: revoked.response.status,
+  restored_session: true,
+  balance_network: balance.payload.network,
 }, null, 2));

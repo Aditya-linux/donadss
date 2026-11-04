@@ -4,6 +4,7 @@ import { ShieldCheck, ShoppingBag } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { applyCommerceAction, CommerceCompletedTask, createCommerceTask, waitForTask } from "@/lib/donads-api";
 import { MascotLoader } from "@/components/mascot";
+import { ReportDownloadButton } from "@/components/report-download-button";
 
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -55,6 +56,7 @@ export function CommerceWorkspace() {
         <div className="rounded-xl bg-muted p-4 text-sm"><ShieldCheck className="mb-2 size-5"/>State: <span className="font-mono">{workflow.state}</span>. Authorization does not sign, broadcast, or place an order.</div>
         {workflow.state === "awaiting_approval" ? <div className="flex gap-3"><button disabled={working} onClick={()=>void act("approve")} className="min-h-11 rounded-xl bg-primary px-4 text-sm text-primary-foreground">Authorize exact intent</button><button disabled={working} onClick={()=>void act("reject")} className="min-h-11 rounded-xl border border-border px-4 text-sm">Reject</button></div> : null}
       </section>}
+      {task ? <ReportDownloadButton task={task} /> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
     </div>
   </main>;

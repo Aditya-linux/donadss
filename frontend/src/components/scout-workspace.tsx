@@ -12,6 +12,7 @@ import { FormEvent, useRef, useState } from "react";
 
 import { FeedbackControls } from "@/components/feedback-controls";
 import { Mascot, MascotLoader } from "@/components/mascot";
+import { ReportDownloadButton } from "@/components/report-download-button";
 import {
   ApiError,
   ScoutCompletedTask,
@@ -114,6 +115,7 @@ function ResearchReport({ task }: { task: ScoutCompletedTask }) {
         <p>{report.limitations}</p>
         <p className="mt-1 font-mono">{version}</p>
       </div>
+      <div className="border-t border-border p-4 sm:p-5"><ReportDownloadButton task={task} /></div>
       <FeedbackControls taskId={task.id} />
     </div>
   );

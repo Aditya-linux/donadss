@@ -18,6 +18,7 @@ import { FormEvent, useRef, useState } from "react";
 
 import { FeedbackControls } from "@/components/feedback-controls";
 import { MascotLoader } from "@/components/mascot";
+import { ReportDownloadButton } from "@/components/report-download-button";
 import {
   ApiError,
   OperatorCompletedTask,
@@ -168,6 +169,7 @@ function PlanView({
               {routineSaved ?? "Save as routine"}
             </button>
           ) : null}
+          {terminal ? <ReportDownloadButton task={task} /> : null}
         </div>
       </div>
       {terminal ? <FeedbackControls taskId={task.id} /> : null}

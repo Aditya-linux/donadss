@@ -11,6 +11,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { FeedbackControls } from "@/components/feedback-controls";
 import { Mascot, MascotLoader } from "@/components/mascot";
+import { ReportDownloadButton } from "@/components/report-download-button";
 import {
   ApiError,
   BrandProfile,
@@ -124,6 +125,7 @@ function CampaignReport({ task }: { task: GrowthCompletedTask }) {
         <p>Publishing and external messaging are disabled. Review every draft before use.</p>
         <p className="mt-1 font-mono">{version}</p>
       </div>
+      <div className="border-t border-border p-4 sm:p-5"><ReportDownloadButton task={task} /></div>
       <FeedbackControls taskId={task.id} />
     </div>
   );

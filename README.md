@@ -76,6 +76,27 @@ Operator executes dependency waves in parallel. Saved routines create a fresh re
 
 Every asynchronous workflow uses the DONADS canvas loader from the approved process design. Its status text changes with the real operation, animation stops when the operation ends, and reduced-motion users receive a stable idle pose.
 
+Completed specialist results can be exported as structured PDF reports. Reports are generated locally in the browser, require no PDF service or API key, include task metadata, request fields, structured results, activity evidence, timestamps, and page numbers, and omit fields whose names indicate tokens, signatures, secrets, seed phrases, or private keys.
+
+## Credentials and service requirements
+
+The current local/testnet build requires **no paid API key**. It uses the public Monad Testnet RPC, the user's browser wallet, deterministic specialists, and local browser PDF generation.
+
+| Capability | Required now | Production requirement |
+| --- | --- | --- |
+| Monad reads and receipt verification | Public `MONAD_RPC_URL`; no key | Dedicated authenticated Monad RPC endpoint with quotas and failover |
+| Wallet authentication and payments | User-controlled EVM wallet; no application key | Same non-custodial model, plus audited policy-vault address for bounded automation |
+| PDF reports | No key | No key unless reports are later archived to external storage |
+| Public web deployment | Vercel and persistent-backend accounts | Deployment tokens belong in each platform's secret store, never the repository |
+| Real product orders | Not configured | Documented crypto merchant API URL/token and webhook verification secret |
+| Model-backed generation | Not configured | One approved LLM provider key, budgets, redaction, fallback, and evaluation suite |
+| Web-wide search | Not configured; Scout reads supplied URLs | Approved search API key plus citation and source-quality controls |
+| Connected applications | Not configured | Per-connector OAuth client ID/secret and encrypted, revocable user tokens |
+| Multi-instance durability | Not required for single-instance preview | PostgreSQL connection, encrypted Redis/session store, and durable job queue |
+| Monitoring | Local logs | Error-monitoring DSN, metrics, alerting, and privacy-safe audit retention |
+
+Do not add unused provider secrets. Select a provider only when its connector is implemented and tested; use separate testnet and production credentials with the minimum permissions.
+
 ## Local setup
 
 Requirements: current stable Rust, Node.js, npm, and an EVM browser wallet configured for Monad Testnet.

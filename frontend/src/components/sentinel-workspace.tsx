@@ -4,7 +4,8 @@ import { ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { MascotLoader } from "@/components/mascot";
-import { createSentinelTask, waitForTask } from "@/lib/donads-api";
+import { ReportDownloadButton } from "@/components/report-download-button";
+import { createSentinelTask, SentinelCompletedTask, waitForTask } from "@/lib/donads-api";
 
 type Report = {
   summary: string;
@@ -21,6 +22,7 @@ type Report = {
 export function SentinelWorkspace() {
   const [bytecode, setBytecode] = useState("");
   const [report, setReport] = useState<Report | null>(null);
+  const [task, setTask] = useState<SentinelCompletedTask | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,6 +47,7 @@ export function SentinelWorkspace() {
         bytes: data.bytecode_bytes,
         findings: data.findings,
       });
+      setTask(task);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Sentinel failed.");
     } finally {
@@ -101,6 +104,7 @@ export function SentinelWorkspace() {
             )) : <p className="rounded-xl bg-muted p-4 text-sm">No high-confidence opcode signals found.</p>}
           </section>
         ) : null}
+        {task ? <ReportDownloadButton task={task} /> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       </div>
     </main>

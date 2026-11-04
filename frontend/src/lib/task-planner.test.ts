@@ -52,4 +52,10 @@ describe("planUnifiedTask", () => {
       kind: "escrow_create", amount: "1", seller: "0x1111111111111111111111111111111111111111", arbiter: "0x2222222222222222222222222222222222222222", refundHours: 24, terms: "Product delivered as agreed",
     });
   });
+
+  it("routes P2P escrow lifecycle actions", () => {
+    expect(planUnifiedTask("Release escrow 0x1111111111111111111111111111111111111111")).toEqual({ kind: "escrow_action", escrow: "0x1111111111111111111111111111111111111111", action: "release", evidence: null });
+    expect(planUnifiedTask("Dispute escrow 0x1111111111111111111111111111111111111111 evidence Package was not delivered")).toEqual({ kind: "escrow_action", escrow: "0x1111111111111111111111111111111111111111", action: "dispute", evidence: "Package was not delivered" });
+    expect(planUnifiedTask("Resolve escrow 0x1111111111111111111111111111111111111111 to seller resolution Delivery evidence accepted")).toEqual({ kind: "escrow_action", escrow: "0x1111111111111111111111111111111111111111", action: "resolve_seller", evidence: "Delivery evidence accepted" });
+  });
 });

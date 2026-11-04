@@ -10,6 +10,7 @@ export type UnifiedPlan =
   | { kind: "session_configure"; sessionKey: string; vault: string; recipient: string; perTransaction: string; daily: string; durationHours: number }
   | { kind: "session_revoke"; sessionKey: string; vault: string }
   | { kind: "escrow_create"; amount: string; seller: string; arbiter: string; refundHours: number; terms: string }
+  | { kind: "escrow_action"; escrow: string; action: "release" | "cooperative_refund" | "timeout_refund" | "dispute" | "resolve_seller" | "resolve_buyer"; evidence: string | null }
   | { kind: "clarify"; message: string };
 
 function urlsIn(value: string): string[] {
@@ -28,10 +29,16 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const escrow = prompt.match(/\bcreate\s+escrow\s+(\d+(?:\.\d{1,18})?)\s+MON\s+for\s+(0x[0-9a-fA-F]{40})\s+with\s+arbiter\s+(0x[0-9a-fA-F]{40})\s+refund\s+after\s+(\d{1,4})\s+hours?\s+terms\s+(.{3,500})$/i);
   const configureSession = prompt.match(/\ballow\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})\s+to\s+send\s+up\s+to\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+transaction\s+and\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+day\s+for\s+(\d{1,4})\s+hours?\s+to\s+(0x[0-9a-fA-F]{40})/i);
   const revokeSession = prompt.match(/\brevoke\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})/i);
+  const escrowAddress = prompt.match(/\bescrow\s+(0x[0-9a-fA-F]{40})\b/i)?.[1];
 
   if (!prompt) return { kind: "clarify", message: "Describe the outcome you want DONADS to complete." };
   if (/\bdeploy\s+(?:my\s+)?policy\s+vault\b/i.test(prompt)) return { kind: "vault_deploy" };
   if (escrow) return { kind: "escrow_create", amount: escrow[1], seller: escrow[2], arbiter: escrow[3], refundHours: Number(escrow[4]), terms: escrow[5].trim() };
+  if (escrowAddress && /\brelease\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "release", evidence: null };
+  if (escrowAddress && /\bcooperative\s+refund\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "cooperative_refund", evidence: null };
+  if (escrowAddress && /\btimeout\s+refund\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "timeout_refund", evidence: null };
+  if (escrowAddress && /\bdispute\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "dispute", evidence: prompt.match(/\bevidence\s+(.{3,500})$/i)?.[1].trim() ?? null };
+  if (escrowAddress && /\bresolve\s+escrow\b/i.test(prompt) && /\bto\s+(?:seller|buyer)\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: /\bto\s+seller\b/i.test(prompt) ? "resolve_seller" : "resolve_buyer", evidence: prompt.match(/\bresolution\s+(.{3,500})$/i)?.[1].trim() ?? null };
   if (configureSession) return { kind: "session_configure", sessionKey: configureSession[1], vault: configureSession[2], perTransaction: configureSession[3], daily: configureSession[4], durationHours: Number(configureSession[5]), recipient: configureSession[6] };
   if (revokeSession) return { kind: "session_revoke", sessionKey: revokeSession[1], vault: revokeSession[2] };
   if (/\bescrow\b/i.test(prompt)) return { kind: "clarify", message: "Use: ‘Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed’." };

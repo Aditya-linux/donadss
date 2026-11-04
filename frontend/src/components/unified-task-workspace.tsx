@@ -189,7 +189,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
       plan = (await planAiTask(value, modelAttachments)).plan;
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
-      if (plan.kind === "vault_deploy" || plan.kind === "session_configure" || plan.kind === "session_revoke" || plan.kind === "escrow_create") {
+      if (plan.kind === "vault_deploy" || plan.kind === "session_configure" || plan.kind === "session_revoke" || plan.kind === "escrow_create" || plan.kind === "escrow_action") {
         if (!walletAddress) throw new Error("Reconnect your wallet before preparing this contract action.");
         const provider = await connectWalletProvider();
         await ensureMonadTestnet(provider);
@@ -214,6 +214,26 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           if (!receipt.contractAddress) throw new Error("Escrow deployment receipt did not contain a contract address.");
           const termsHash = keccak256(stringToHex(plan.terms));
           setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Funded escrow deployed at ${receipt.contractAddress}. Terms hash: ${termsHash}. Transaction: ${hash}` }]);
+          return;
+        }
+        if (plan.kind === "escrow_action") {
+          let data: `0x${string}`;
+          if (plan.action === "release") data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "release" });
+          else if (plan.action === "cooperative_refund") data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "cooperativeRefund" });
+          else if (plan.action === "timeout_refund") data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "timeoutRefund" });
+          else if (plan.action === "dispute") {
+            if (!plan.evidence) throw new Error("Disputing an escrow requires a concise evidence description.");
+            data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "raiseDispute", args: [keccak256(stringToHex(plan.evidence))] });
+          } else {
+            if (!plan.evidence) throw new Error("Resolving an escrow requires a concise resolution description.");
+            data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "resolve", args: [plan.action === "resolve_seller", keccak256(stringToHex(plan.evidence))] });
+          }
+          setProgress("Flow is requesting the escrow state transition…");
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.escrow, data, value: "0x0" }] }) as string;
+          await waitForWalletReceipt(provider, hash);
+          const action = plan.action.replaceAll("_", " ");
+          const escrowAddress = plan.escrow;
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Escrow ${escrowAddress} completed the ${action} action. Transaction: ${hash}` }]);
           return;
         }
         if (plan.kind === "session_configure") {

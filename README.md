@@ -97,6 +97,22 @@ The current local/testnet build requires **no paid API key**. It uses the public
 
 Do not add unused provider secrets. Select a provider only when its connector is implemented and tested; use separate testnet and production credentials with the minimum permissions.
 
+### Approved free-user AI policy
+
+The model gateway is not active until an approved provider key is configured. When activated, these limits are mandatory and shared by every provider adapter:
+
+- 3 model requests per minute per wallet.
+- 30 model requests per UTC day per wallet.
+- 1 running model request per wallet.
+- 5 attachments per task, at most 10 MB each.
+- 20,000 input tokens and 2,000 output tokens per task.
+- 30-second provider timeout.
+- 1 retry only for transient failures.
+- No retry for invalid input or provider HTTP `429` responses.
+- Deterministic specialist fallback when model quota or availability prevents inference.
+
+The canonical values live in `frontend/src/lib/ai-policy.ts`. Server-side database leases and wallet-scoped counters enforce concurrency and request quotas; browser checks are usability aids, not the security boundary.
+
 ## Local setup
 
 Requirements: Node.js, npm, a Postgres connection string, and a free Reown project ID. WalletConnect supports mobile/QR wallets; an injected EVM browser wallet is the fallback when Reown is not configured. Rust is optional unless running the reference implementation tests.

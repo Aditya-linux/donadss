@@ -77,6 +77,22 @@ export async function ensureSchema(): Promise<void> {
       requests INTEGER NOT NULL,
       PRIMARY KEY(key_hash, window_start_ms)
     )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_ai_leases (
+      owner_id TEXT PRIMARY KEY,
+      request_id UUID NOT NULL,
+      expires_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_ai_usage (
+      request_id UUID PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE INDEX IF NOT EXISTS donads_ai_usage_owner_created_idx ON donads_ai_usage(owner_id, created_at_ms DESC)`;
   })();
   return schemaReady;
 }
@@ -116,6 +132,31 @@ export async function takeRateLimit(key: string, limit: number, windowMs: number
     ON CONFLICT(key_hash, window_start_ms) DO UPDATE SET requests = donads_rate_limits.requests + 1
     RETURNING requests` as Array<{ requests: number }>;
   return Number(rows[0]?.requests ?? limit + 1) <= limit;
+}
+
+export async function acquireAiLease(ownerId: string, requestId: string, expiresAtMs: number): Promise<boolean> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`INSERT INTO donads_ai_leases(owner_id, request_id, expires_at_ms)
+    VALUES (${ownerId}, ${requestId}, ${expiresAtMs})
+    ON CONFLICT(owner_id) DO UPDATE SET request_id = EXCLUDED.request_id, expires_at_ms = EXCLUDED.expires_at_ms
+    WHERE donads_ai_leases.expires_at_ms <= ${Date.now()}
+    RETURNING owner_id` as Array<{ owner_id: string }>;
+  return rows.length === 1;
+}
+
+export async function releaseAiLease(ownerId: string, requestId: string): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`DELETE FROM donads_ai_leases WHERE owner_id = ${ownerId} AND request_id = ${requestId}`;
+}
+
+export async function recordAiUsage(input: { requestId: string; ownerId: string; provider: string; model: string; inputTokens: number; outputTokens: number; status: string }): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`INSERT INTO donads_ai_usage(request_id, owner_id, provider, model, input_tokens, output_tokens, status, created_at_ms)
+    VALUES (${input.requestId}, ${input.ownerId}, ${input.provider}, ${input.model}, ${input.inputTokens}, ${input.outputTokens}, ${input.status}, ${Date.now()})
+    ON CONFLICT(request_id) DO NOTHING`;
 }
 
 export async function createSession(token: string, ownerId: string, expiresAtMs: number) {

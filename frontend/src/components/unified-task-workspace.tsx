@@ -19,12 +19,13 @@ import {
   waitForTask,
 } from "@/lib/donads-api";
 import { planUnifiedTask } from "@/lib/task-planner";
+import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask };
 type Attachment = { id: string; file: File; previewUrl: string | null; textContent: string | null };
 
-const MAX_ATTACHMENTS = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS = DONADS_AI_POLICY.maxAttachmentsPerTask;
+const MAX_FILE_BYTES = DONADS_AI_POLICY.maxAttachmentBytes;
 const MAX_TEXT_CHARACTERS = 40_000;
 
 const examples = [

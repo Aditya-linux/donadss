@@ -4,7 +4,8 @@ import type { Task } from "@/lib/donads-api";
 import { executeBot } from "@/server/bots";
 import { insertTask, updateTask } from "@/server/database";
 import { taskEvent } from "@/server/donads-types";
-import { sendCheckpointNotification } from "@/server/push";
+import { sendCheckpointNotifications } from "@/server/checkpoint-notifications";
+import { createTaskTitle } from "@/lib/task-history";
 
 function persistedInput(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -28,7 +29,7 @@ export async function createAndExecuteTask(
   const now = Date.now();
   const executionInput = payload.input ?? {};
   const task = {
-    id: randomUUID(), owner_id: ownerId, prompt, bot, input: persistedInput(executionInput),
+    id: randomUUID(), owner_id: ownerId, title: createTaskTitle(prompt, bot), prompt, bot, input: persistedInput(executionInput),
     events: [{ sequence: 1, kind: "queued", message: `${bot} task accepted.`, at_ms: now }],
     created_at_ms: now, updated_at_ms: now, feedback: null, status: { state: "running" as const },
   } as Task;
@@ -44,6 +45,6 @@ export async function createAndExecuteTask(
     task.events.push(taskEvent(task.events, "failed", message));
   }
   await updateTask(task);
-  await sendCheckpointNotification(task).catch((error) => console.error("DONADS push notification failed", error));
+  await sendCheckpointNotifications(task);
   return task;
 }

@@ -42,7 +42,7 @@ export function taskResponseText(task: CompletedTask): string {
 }
 
 export function shouldOfferPdf(task: CompletedTask): boolean {
-  if (task.bot === "operator") return task.status.data.workflow.state === "completed";
+  if (task.bot === "operator") return task.status.data.workflow.state === "completed" && task.status.data.workflow.steps.length >= 2;
   if (task.bot === "growth") return task.status.data.campaign.calendar.length >= 7;
   if (task.bot === "commerce") return task.status.data.workflow.state === "completed";
   if (task.bot === "flow") return task.status.data.workflow.state === "confirmed";

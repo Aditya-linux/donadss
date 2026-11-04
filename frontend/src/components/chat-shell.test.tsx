@@ -2,7 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WalletConnectionCancelledError } from "@/lib/wallet-provider";
-import { ChatShell } from "./chat-shell";
+import type { Task } from "@/lib/donads-api";
+import { ChatShell, DeleteHistoryDialog } from "./chat-shell";
 
 const walletMocks = vi.hoisted(() => ({ connect: vi.fn() }));
 
@@ -65,5 +66,25 @@ describe("ChatShell", () => {
     expect(screen.queryByText("Opening the wallet chooser…")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
+  });
+});
+
+describe("DeleteHistoryDialog", () => {
+  it("requires explicit confirmation and explains receipt retention", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    const task = {
+      id: "task-1",
+      title: "Monad research brief",
+      prompt: "Research Monad",
+      bot: "scout",
+      status: { state: "failed", error: "Source unavailable", latency_ms: 1 },
+    } as Task;
+
+    render(<DeleteHistoryDialog task={task} working={false} error={null} onClose={vi.fn()} onConfirm={onConfirm} />);
+    expect(screen.getByRole("heading", { name: "Delete from history?" })).toBeInTheDocument();
+    expect(screen.getByText(/transaction receipts and security audit evidence remain preserved/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete history" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
   });
 });

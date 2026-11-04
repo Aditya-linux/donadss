@@ -52,6 +52,7 @@ export async function ensureSchema(): Promise<void> {
     await db`CREATE TABLE IF NOT EXISTS donads_tasks (
       id UUID PRIMARY KEY,
       owner_id TEXT NOT NULL,
+      title TEXT,
       prompt TEXT NOT NULL,
       bot TEXT NOT NULL,
       input JSONB NOT NULL,
@@ -61,6 +62,8 @@ export async function ensureSchema(): Promise<void> {
       created_at_ms BIGINT NOT NULL,
       updated_at_ms BIGINT NOT NULL
     )`;
+    await db`ALTER TABLE donads_tasks ADD COLUMN IF NOT EXISTS title TEXT`;
+    await db`ALTER TABLE donads_tasks ADD COLUMN IF NOT EXISTS deleted_at_ms BIGINT`;
     await db`CREATE INDEX IF NOT EXISTS donads_tasks_owner_updated_idx ON donads_tasks(owner_id, updated_at_ms DESC)`;
     await db`CREATE TABLE IF NOT EXISTS donads_missions (
       id UUID PRIMARY KEY,
@@ -188,6 +191,25 @@ export async function ensureSchema(): Promise<void> {
       updated_at_ms BIGINT NOT NULL
     )`;
     await db`CREATE INDEX IF NOT EXISTS donads_push_subscriptions_owner_idx ON donads_push_subscriptions(owner_id)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_telegram_link_codes (
+      code_hash TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      expires_at_ms BIGINT NOT NULL,
+      consumed BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE INDEX IF NOT EXISTS donads_telegram_link_codes_owner_idx ON donads_telegram_link_codes(owner_id)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_telegram_links (
+      owner_id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL UNIQUE,
+      username TEXT,
+      linked_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_telegram_updates (
+      update_id BIGINT PRIMARY KEY,
+      received_at_ms BIGINT NOT NULL
+    )`;
     await db`CREATE TABLE IF NOT EXISTS donads_swap_quotes (
       quote_id UUID PRIMARY KEY,
       owner_id TEXT NOT NULL,
@@ -301,8 +323,8 @@ export async function insertTask(task: Task): Promise<void> {
   const attemptId = randomUUID();
   const firstEvent = task.events[0];
   await db.transaction([
-    db`INSERT INTO donads_tasks(id, owner_id, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms)
-      VALUES (${task.id}, ${task.owner_id}, ${task.prompt}, ${task.bot}, ${JSON.stringify(task.input)}, ${JSON.stringify(task.events)}, ${JSON.stringify(task.status)}, ${JSON.stringify(task.feedback)}, ${task.created_at_ms}, ${task.updated_at_ms})`,
+    db`INSERT INTO donads_tasks(id, owner_id, title, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms)
+      VALUES (${task.id}, ${task.owner_id}, ${task.title ?? task.prompt.slice(0, 58)}, ${task.prompt}, ${task.bot}, ${JSON.stringify(task.input)}, ${JSON.stringify(task.events)}, ${JSON.stringify(task.status)}, ${JSON.stringify(task.feedback)}, ${task.created_at_ms}, ${task.updated_at_ms})`,
     db`INSERT INTO donads_missions(id, task_id, owner_id, objective, specialist, state, version, created_at_ms, updated_at_ms)
       VALUES (${missionId}, ${task.id}, ${task.owner_id}, ${task.prompt}, ${task.bot}, 'running', 1, ${task.created_at_ms}, ${task.updated_at_ms})`,
     db`INSERT INTO donads_mission_events(mission_id, owner_id, sequence, kind, message, at_ms)
@@ -404,23 +426,33 @@ async function hydrateMission(db: NeonQueryFunction<false, false>, row: Record<s
 export async function getTask(ownerId: string, id: string): Promise<Task | null> {
   await ensureSchema();
   const db = sql();
-  const rows = await db`SELECT id::text, owner_id, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms
-    FROM donads_tasks WHERE id = ${id} AND owner_id = ${ownerId} LIMIT 1` as Array<Record<string, unknown>>;
+  const rows = await db`SELECT id::text, owner_id, title, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms
+    FROM donads_tasks WHERE id = ${id} AND owner_id = ${ownerId} AND deleted_at_ms IS NULL LIMIT 1` as Array<Record<string, unknown>>;
   return rows[0] ? hydrateTask(rows[0]) : null;
 }
 
 export async function listTasks(ownerId: string, limit: number): Promise<Task[]> {
   await ensureSchema();
   const db = sql();
-  const rows = await db`SELECT id::text, owner_id, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms
-    FROM donads_tasks WHERE owner_id = ${ownerId} ORDER BY updated_at_ms DESC LIMIT ${limit}` as Array<Record<string, unknown>>;
+  const rows = await db`SELECT id::text, owner_id, title, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms
+    FROM donads_tasks WHERE owner_id = ${ownerId} AND deleted_at_ms IS NULL ORDER BY updated_at_ms DESC LIMIT ${limit}` as Array<Record<string, unknown>>;
   return rows.map(hydrateTask);
+}
+
+export async function deleteTaskHistory(ownerId: string, id: string): Promise<boolean> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`UPDATE donads_tasks SET deleted_at_ms = ${Date.now()}
+    WHERE id = ${id} AND owner_id = ${ownerId} AND deleted_at_ms IS NULL
+    RETURNING id` as Array<{ id: string }>;
+  return rows.length === 1;
 }
 
 function hydrateTask(row: Record<string, unknown>): Task {
   return {
     id: String(row.id),
     owner_id: String(row.owner_id),
+    title: row.title ? String(row.title) : undefined,
     prompt: String(row.prompt),
     bot: String(row.bot),
     input: row.input,
@@ -487,6 +519,54 @@ export async function listPushSubscriptions(ownerId: string): Promise<Array<{ en
   const db = sql();
   const rows = await db`SELECT subscription FROM donads_push_subscriptions WHERE owner_id = ${ownerId}` as Array<{ subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }>;
   return rows.map((row) => row.subscription);
+}
+
+export async function putTelegramLinkCode(ownerId: string, codeHash: string, expiresAtMs: number): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`DELETE FROM donads_telegram_link_codes WHERE owner_id = ${ownerId} OR expires_at_ms <= ${Date.now()}`;
+  await db`INSERT INTO donads_telegram_link_codes(code_hash, owner_id, expires_at_ms, consumed, created_at_ms)
+    VALUES (${codeHash}, ${ownerId}, ${expiresAtMs}, FALSE, ${Date.now()})`;
+}
+
+export async function consumeTelegramLinkCode(codeHash: string, chatId: string, username: string | null): Promise<string | null> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`WITH claimed AS (
+      UPDATE donads_telegram_link_codes SET consumed = TRUE
+      WHERE code_hash = ${codeHash} AND consumed = FALSE AND expires_at_ms > ${Date.now()}
+      RETURNING owner_id
+    ), removed_chat AS (
+      DELETE FROM donads_telegram_links WHERE chat_id = ${chatId}
+    )
+    INSERT INTO donads_telegram_links(owner_id, chat_id, username, linked_at_ms, updated_at_ms)
+      SELECT owner_id, ${chatId}, ${username}, ${Date.now()}, ${Date.now()} FROM claimed
+    ON CONFLICT(owner_id) DO UPDATE SET chat_id = EXCLUDED.chat_id, username = EXCLUDED.username, updated_at_ms = EXCLUDED.updated_at_ms
+    RETURNING owner_id` as Array<{ owner_id: string }>;
+  return rows[0]?.owner_id ?? null;
+}
+
+export async function getTelegramLink(ownerId: string): Promise<{ chat_id: string; username: string | null; linked_at_ms: number } | null> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT chat_id, username, linked_at_ms FROM donads_telegram_links WHERE owner_id = ${ownerId} LIMIT 1` as Array<{ chat_id: string; username: string | null; linked_at_ms: string | number }>;
+  const row = rows[0];
+  return row ? { chat_id: row.chat_id, username: row.username, linked_at_ms: Number(row.linked_at_ms) } : null;
+}
+
+export async function deleteTelegramLink(ownerId: string): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`DELETE FROM donads_telegram_links WHERE owner_id = ${ownerId}`;
+  await db`DELETE FROM donads_telegram_link_codes WHERE owner_id = ${ownerId}`;
+}
+
+export async function claimTelegramUpdate(updateId: number): Promise<boolean> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`INSERT INTO donads_telegram_updates(update_id, received_at_ms)
+    VALUES (${updateId}, ${Date.now()}) ON CONFLICT(update_id) DO NOTHING RETURNING update_id` as Array<{ update_id: string | number }>;
+  return rows.length === 1;
 }
 
 export async function putSwapQuote(ownerId: string, quote: UniswapQuote): Promise<void> {

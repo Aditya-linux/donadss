@@ -13,7 +13,12 @@ describe("chat-first task responses", () => {
   });
 
   it("offers PDF only for a completed formal Operator workflow", () => {
-    const task = { ...base, bot: "operator", status: { state: "completed", summary: "Completed", data: { workflow: { state: "completed", steps: [], cancellation_requested: false }, agent_version: "operator-orchestration-v2", external_actions: false }, latency_ms: 1 } } as unknown as CompletedTask;
+    const task = { ...base, bot: "operator", status: { state: "completed", summary: "Completed", data: { workflow: { state: "completed", steps: [{}, {}], cancellation_requested: false }, agent_version: "operator-orchestration-v2", external_actions: false }, latency_ms: 1 } } as unknown as CompletedTask;
     expect(shouldOfferPdf(task)).toBe(true);
+  });
+
+  it("keeps small Operator responses in chat only", () => {
+    const task = { ...base, bot: "operator", status: { state: "completed", summary: "Completed", data: { workflow: { state: "completed", steps: [{}], cancellation_requested: false }, agent_version: "operator-orchestration-v2", external_actions: false }, latency_ms: 1 } } as unknown as CompletedTask;
+    expect(shouldOfferPdf(task)).toBe(false);
   });
 });

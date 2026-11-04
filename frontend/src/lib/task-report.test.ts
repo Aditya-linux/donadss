@@ -6,6 +6,7 @@ import { buildTaskReport, flattenReportData, generateTaskReportPdf } from "./tas
 const task: SentinelCompletedTask = {
   id: "72c191d7-61ca-4afa-92e9-25ceb3f03a21",
   owner_id: "0x1111111111111111111111111111111111111111",
+  title: "Bytecode risk assessment",
   prompt: "Scan this bytecode",
   bot: "sentinel",
   input: { bytecode: "0x60ff" },
@@ -30,7 +31,10 @@ const task: SentinelCompletedTask = {
 describe("task report model", () => {
   it("creates deterministic structured sections", () => {
     const report = buildTaskReport(task);
-    expect(report.title).toBe("Sentinel task report");
+    expect(report.title).toBe("Bytecode risk assessment");
+    expect(report.subtitle).toBe("Sentinel completion report");
+    expect(report.summary).toBe("One risk signal found.");
+    expect(report.highlights[0]).toContain("HIGH: Self destruct");
     expect(report.filename).toBe("donads-sentinel-72c191d7.pdf");
     expect(report.metadata).toContainEqual(["Worked for", "1s"]);
     expect(report.result).toContainEqual(["Threat score", "60"]);
@@ -46,6 +50,6 @@ describe("task report model", () => {
     const pdf = await generateTaskReportPdf(task);
     expect(pdf.filename).toBe("donads-sentinel-72c191d7.pdf");
     expect(new TextDecoder().decode(pdf.bytes.slice(0, 8))).toMatch(/^%PDF-/);
-    expect(pdf.bytes.byteLength).toBeGreaterThan(2_000);
+    expect(pdf.bytes.byteLength).toBeGreaterThan(3_000);
   });
 });

@@ -4,6 +4,7 @@ export type StoredTask = Task;
 export type NewTask = {
   id: string;
   owner_id: string;
+  title: string;
   prompt: string;
   bot: string;
   input: unknown;

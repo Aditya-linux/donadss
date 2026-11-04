@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   captureOperatorRoutine,
+  deleteTaskHistory,
   extractSourceUrls,
   runOperatorRoutine,
 } from "./donads-api";
@@ -77,6 +78,19 @@ describe("Operator routines API", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/routines/research%20draft/runs",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
+describe("Task history API", () => {
+  it("deletes a wallet-owned history item through the task endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteTaskHistory("task-1")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/tasks/task-1",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

@@ -5,7 +5,13 @@ import { mainnetReadiness } from "@/server/mainnet-readiness";
 describe("mainnet readiness", () => {
   it("cannot enable mainnet from evidence flags alone", () => {
     const result = mainnetReadiness(100);
-    expect(result.ready).toBe(false);
+    expect(result.network_enabled).toBe(false);
+    expect(result.total).toBe(20);
+  });
+
+  it("reports evidence progress without turning on execution", () => {
+    const result = mainnetReadiness(10);
+    expect(result.passed).toBeGreaterThanOrEqual(1);
     expect(result.network_enabled).toBe(false);
   });
 

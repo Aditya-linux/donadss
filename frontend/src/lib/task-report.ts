@@ -1,10 +1,14 @@
 import type { CompletedTask } from "@/lib/donads-api";
 import { formatTaskDuration, taskCompletionTime } from "@/lib/task-receipt";
+import { taskDisplayTitle } from "@/lib/task-history";
 
 export type ReportRow = [label: string, value: string];
 
 export type TaskReportModel = {
   title: string;
+  subtitle: string;
+  summary: string;
+  highlights: string[];
   filename: string;
   metadata: ReportRow[];
   request: ReportRow[];
@@ -70,10 +74,50 @@ function formatTime(milliseconds: number): string {
   }).format(new Date(milliseconds));
 }
 
+function reportHighlights(task: CompletedTask): string[] {
+  if (task.bot === "scout") {
+    return task.status.data.report.findings.slice(0, 6).map((finding) => finding.text);
+  }
+  if (task.bot === "growth") {
+    const campaign = task.status.data.campaign;
+    return [
+      `${campaign.calendar.length} review-ready drafts were prepared for ${campaign.target_audience}.`,
+      `Channels: ${[...new Set(campaign.calendar.map((day) => day.platform))].join(", ")}.`,
+      "Publishing remained disabled; every draft still requires human review.",
+    ];
+  }
+  if (task.bot === "sentinel") {
+    const findings = task.status.data.findings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.title} — ${finding.evidence}`);
+    return findings.length ? findings : ["No deterministic opcode risk signals were detected in the supplied executable bytecode."];
+  }
+  if (task.bot === "operator") {
+    return task.status.data.workflow.steps.map((step) => `${step.title}: ${step.summary ?? step.status}.`);
+  }
+  if (task.bot === "commerce") {
+    const workflow = task.status.data.workflow;
+    return [
+      `Selected ${workflow.selected_offer.name} from ${workflow.selected_offer.merchant}.`,
+      `Validated total: ${workflow.total_atomic} ${workflow.asset} atomic units.`,
+      workflow.order_receipt ? `Order receipt ${workflow.order_receipt.order_id} was verified.` : "No verified order receipt was produced.",
+    ];
+  }
+  const workflow = task.status.data.workflow;
+  const payout = workflow.payouts[0];
+  return [
+    payout ? `${payout.amount} ${payout.asset} to ${payout.recipient_address}.` : "No payout was included.",
+    workflow.execution ? `Transaction ${workflow.execution.transaction_hash} was verified in block ${workflow.execution.block_number}.` : "No verified on-chain execution receipt was produced.",
+    `Final payment state: ${workflow.state.replaceAll("_", " ")}.`,
+  ];
+}
+
 export function buildTaskReport(task: CompletedTask): TaskReportModel {
   const specialist = words(task.bot);
+  const title = taskDisplayTitle(task);
   return {
-    title: `${specialist} task report`,
+    title,
+    subtitle: `${specialist} completion report`,
+    summary: task.status.summary,
+    highlights: reportHighlights(task),
     filename: `donads-${task.bot}-${task.id.slice(0, 8)}.pdf`,
     metadata: [
       ["Task ID", task.id],
@@ -129,29 +173,83 @@ export async function generateTaskReportPdf(
     creator: "DONADS report exporter",
   });
   document.setFillColor(...primary);
-  document.rect(0, 0, pageWidth, 5, "F");
-  document.setTextColor(...primary);
+  document.rect(0, 0, pageWidth, 48, "F");
+  document.setTextColor(255, 255, 255);
   document.setFont("helvetica", "bold");
-  document.setFontSize(11);
-  document.text("DONADS", margin, 18);
-  document.setTextColor(...ink);
-  document.setFontSize(22);
-  document.text(report.title, margin, 30);
+  document.setFontSize(10);
+  document.text("DONADS  /  VERIFIED TASK RECORD", margin, 14);
+  document.setFontSize(21);
+  const titleLines = document.splitTextToSize(report.title, pageWidth - (margin * 2) - 26).slice(0, 2) as string[];
+  document.text(titleLines, margin, 25);
   document.setFont("helvetica", "normal");
-  document.setFontSize(9);
-  document.setTextColor(100, 91, 86);
-  document.text("Decentralized On-chain Neural Agent Dispatch System", margin, 36);
-  if (mascot) document.addImage(mascot, "PNG", pageWidth - margin - 17, 12, 17, 17);
+  document.setFontSize(8.5);
+  document.setTextColor(234, 225, 219);
+  document.text(report.subtitle, margin, 42);
+  if (mascot) document.addImage(mascot, "PNG", pageWidth - margin - 19, 14, 19, 19);
 
-  let cursor = 43;
+  let cursor = 58;
   const tableDocument = document as typeof document & { lastAutoTable?: { finalY: number } };
-  const addTable = (heading: string, head: string[], body: string[][], widths?: Record<number, { cellWidth: number }>) => {
-    document.setTextColor(...ink);
+  const ensureSpace = (required: number) => {
+    if (cursor + required <= 272) return;
+    document.addPage();
+    cursor = 20;
+  };
+  const sectionHeading = (heading: string, caption?: string) => {
+    ensureSpace(caption ? 18 : 11);
+    document.setTextColor(...primary);
     document.setFont("helvetica", "bold");
     document.setFontSize(11);
     document.text(heading, margin, cursor);
+    cursor += 5;
+    if (caption) {
+      document.setFont("helvetica", "normal");
+      document.setFontSize(8);
+      document.setTextColor(100, 91, 86);
+      document.text(caption, margin, cursor);
+      cursor += 6;
+    }
+  };
+
+  document.setFillColor(...muted);
+  document.roundedRect(margin, cursor, pageWidth - margin * 2, 25, 3, 3, "F");
+  document.setFont("helvetica", "bold");
+  document.setFontSize(8);
+  document.setTextColor(...primary);
+  document.text("OUTCOME SUMMARY", margin + 5, cursor + 7);
+  document.setFont("helvetica", "normal");
+  document.setFontSize(10);
+  document.setTextColor(...ink);
+  const summaryLines = document.splitTextToSize(report.summary, pageWidth - margin * 2 - 10).slice(0, 3) as string[];
+  document.text(summaryLines, margin + 5, cursor + 14);
+  cursor += 34;
+
+  sectionHeading("Key outcomes", "The most important results, written for quick review.");
+  report.highlights.forEach((highlight, index) => {
+    const lines = document.splitTextToSize(highlight, pageWidth - margin * 2 - 14) as string[];
+    const height = Math.max(10, lines.length * 4.2 + 5);
+    ensureSpace(height);
+    document.setFillColor(255, 255, 255);
+    document.setDrawColor(...border);
+    document.roundedRect(margin, cursor, pageWidth - margin * 2, height, 2, 2, "FD");
+    document.setFillColor(...primary);
+    document.circle(margin + 6, cursor + 5.5, 2.5, "F");
+    document.setTextColor(255, 255, 255);
+    document.setFont("helvetica", "bold");
+    document.setFontSize(7);
+    document.text(String(index + 1), margin + 6, cursor + 6.3, { align: "center" });
+    document.setTextColor(...ink);
+    document.setFont("helvetica", "normal");
+    document.setFontSize(9);
+    document.text(lines, margin + 12, cursor + 6.5);
+    cursor += height + 3;
+  });
+  cursor += 4;
+
+  const addTable = (heading: string, head: string[], body: string[][], widths?: Record<number, { cellWidth: number }>) => {
+    ensureSpace(35);
+    sectionHeading(heading);
     autoTable(document, {
-      startY: cursor + 3,
+      startY: cursor,
       margin: { left: margin, right: margin, top: 16, bottom: 16 },
       head: [head],
       body,
@@ -161,17 +259,13 @@ export async function generateTaskReportPdf(
       alternateRowStyles: { fillColor: muted },
       columnStyles: widths,
     });
-    cursor = (tableDocument.lastAutoTable?.finalY ?? cursor + 12) + 9;
-    if (cursor > 270) {
-      document.addPage();
-      cursor = 20;
-    }
+    cursor = (tableDocument.lastAutoTable?.finalY ?? cursor + 12) + 10;
   };
 
-  addTable("Task record", ["Field", "Value"], report.metadata, { 0: { cellWidth: 42 } });
-  addTable("Request", ["Field", "Value"], report.request, { 0: { cellWidth: 52 } });
-  addTable("Structured result", ["Field", "Value"], report.result, { 0: { cellWidth: 62 } });
-  addTable("Activity", ["Time (UTC)", "Event", "Message"], report.activity, {
+  addTable("Task facts", ["Field", "Value"], report.metadata, { 0: { cellWidth: 42 } });
+  addTable("Original request", ["Field", "Value"], report.request, { 0: { cellWidth: 52 } });
+  addTable("Technical appendix", ["Field", "Value"], report.result, { 0: { cellWidth: 62 } });
+  addTable("Execution timeline", ["Time (UTC)", "Event", "Message"], report.activity, {
     0: { cellWidth: 34 },
     1: { cellWidth: 30 },
   });

@@ -235,6 +235,7 @@ export type OperatorWorkflow = {
 export type TaskBase = {
   id: string;
   owner_id: string;
+  title?: string;
   prompt: string;
   bot: string;
   input: unknown;
@@ -844,6 +845,14 @@ export async function listTaskHistory(
   return readJson<Task[]>(response);
 }
 
+export async function deleteTaskHistory(id: string, signal?: AbortSignal): Promise<void> {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    signal,
+  });
+  if (!response.ok) await readJson(response);
+}
+
 export async function listMissions(
   limit = 20,
   signal?: AbortSignal,
@@ -894,6 +903,23 @@ export async function savePushSubscription(subscription: PushSubscriptionJSON): 
 
 export async function removePushSubscription(endpoint: string): Promise<void> {
   const response = await apiFetch(`${API_URL}/v1/push/subscriptions`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint }) });
+  if (!response.ok) await readJson(response);
+}
+
+export type TelegramConnection = { configured: boolean; connected: boolean; username: string | null; linked_at_ms: number | null };
+
+export async function getTelegramConnection(signal?: AbortSignal): Promise<TelegramConnection> {
+  const response = await apiFetch(`${API_URL}/v1/connectors/telegram`, { signal });
+  return readJson(response);
+}
+
+export async function createTelegramConnection(signal?: AbortSignal): Promise<{ url: string; expires_at_ms: number }> {
+  const response = await apiFetch(`${API_URL}/v1/connectors/telegram/link`, { method: "POST", signal });
+  return readJson(response);
+}
+
+export async function removeTelegramConnection(signal?: AbortSignal): Promise<void> {
+  const response = await apiFetch(`${API_URL}/v1/connectors/telegram`, { method: "DELETE", signal });
   if (!response.ok) await readJson(response);
 }
 

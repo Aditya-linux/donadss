@@ -150,7 +150,7 @@ Completed specialist results can be exported as structured PDF reports. Reports 
 
 Every newly accepted task now creates a normalized, versioned Mission with an append-only event timeline, a specialist step and an execution attempt. Flow Missions additionally persist typed transaction intents, approval evidence, wallet submission state, and independently verified receipts. The original task API remains compatible while the Mission API provides the durable audit model at `GET /api/v1/missions`.
 
-The product exposes a wallet-scoped apps/readiness panel. Its connector catalog covers Google Workspace, Slack, GitHub and Telegram and reports exactly which server-side credentials are missing. Live OAuth is intentionally fail-closed until encrypted token storage, callback state/PKCE, webhook authenticity and disconnect tests are complete. The same panel exposes a mainnet evidence checklist; it cannot enable mainnet.
+Unfinished connector placeholders are not exposed in the product. Telegram appears in the Action needed panel only after its bot, username, signed webhook secret and public app URL are configured server-side. It delivers status and approval deep-links but cannot approve or sign transactions. Other OAuth connectors remain fail-closed until encrypted token storage, callback state/PKCE, webhook authenticity and disconnect tests are complete. Mainnet readiness remains an authenticated evidence endpoint and cannot enable execution.
 
 Architecture and release evidence:
 

@@ -37,7 +37,7 @@ const definitions: Array<Omit<ConnectorSummary, "configured">> = [
     id: "telegram", name: "Telegram",
     purpose: "Receive Mission updates and open approval checkpoints on mobile.",
     capabilities: ["Status notifications", "Approval deep links"], connection_mode: "bot-link",
-    required_environment: ["TELEGRAM_BOT_TOKEN", "DONADS_CONNECTOR_ENCRYPTION_KEY"],
+    required_environment: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_USERNAME", "TELEGRAM_WEBHOOK_SECRET", "DONADS_PUBLIC_APP_URL"],
     financial_authority: false,
   },
 ];

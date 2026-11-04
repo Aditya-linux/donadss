@@ -3,6 +3,7 @@ import { start } from "workflow/api";
 import { formatEther } from "viem";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 import { pendingApprovals } from "@/lib/approvals";
+import { canDeleteTaskHistory } from "@/lib/task-history";
 
 import type {
   BrandProfile,
@@ -23,7 +24,10 @@ import {
   getSwapQuote as loadSwapQuote,
   completeSwapQuote,
   countVerifiedTestnetReceipts,
+  deleteTaskHistory,
   deletePushSubscription,
+  deleteTelegramLink,
+  getTelegramLink,
   listRoutines,
   listMissions,
   getMission,
@@ -34,7 +38,7 @@ import {
   putSwapQuote,
   updateTask,
 } from "@/server/database";
-import { assertTrustedOrigin, readJsonObject, safeFailure } from "@/server/api-security";
+import { assertTrustedOrigin, PublicApiError, readJsonObject, safeFailure } from "@/server/api-security";
 import { geminiConfigured } from "@/server/gemini";
 import { planTask } from "@/server/ai-planner";
 import { taskEvent } from "@/server/donads-types";
@@ -42,10 +46,12 @@ import { encodeErc20Transfer, formatTokenAmount, monadRpc, readErc20Balance } fr
 import { createAndExecuteTask } from "@/server/tasks";
 import { operatorWorkflow } from "@/workflows/operator";
 import { quoteUniswapSwap } from "@/server/uniswap";
-import { publicVapidKey, sendCheckpointNotification } from "@/server/push";
+import { publicVapidKey } from "@/server/push";
+import { sendCheckpointNotifications } from "@/server/checkpoint-notifications";
 import { connectorCatalog } from "@/server/connectors";
 import { mainnetReadiness } from "@/server/mainnet-readiness";
 import { assessThreat } from "@/server/threat-intelligence";
+import { createTelegramLink, telegramConfigured } from "@/server/telegram";
 
 export const maxDuration = 300;
 
@@ -123,7 +129,7 @@ async function flowAction(ownerId: string, id: string, request: Request): Promis
   task.updated_at_ms = Date.now();
   task.events.push(taskEvent(task.events, String(action.action), task.status.summary));
   await updateTask(task);
-  await sendCheckpointNotification(task).catch((error) => console.error("DONADS push notification failed", error));
+  await sendCheckpointNotifications(task);
   return json({ task, duplicate_prevented: duplicatePrevented });
 }
 
@@ -293,6 +299,12 @@ async function route(request: Request, context: Context): Promise<Response> {
     const payload = await body(request); await deletePushSubscription(ownerId, String(payload.endpoint ?? "")); return new Response(null, { status: 204 });
   }
   if (method === "GET" && segments.join("/") === "approvals") return json(pendingApprovals(await listTasks(ownerId, 100)));
+  if (method === "GET" && segments.join("/") === "connectors/telegram") {
+    const link = await getTelegramLink(ownerId);
+    return json({ configured: telegramConfigured(), connected: Boolean(link), username: link?.username ?? null, linked_at_ms: link?.linked_at_ms ?? null });
+  }
+  if (method === "POST" && segments.join("/") === "connectors/telegram/link") return json(await createTelegramLink(ownerId), 201);
+  if (method === "DELETE" && segments.join("/") === "connectors/telegram") { await deleteTelegramLink(ownerId); return new Response(null, { status: 204 }); }
   if (method === "GET" && segments.join("/") === "connectors") return json(connectorCatalog());
   if (method === "GET" && segments.join("/") === "readiness/mainnet") return json(mainnetReadiness(await countVerifiedTestnetReceipts(ownerId)));
   if (method === "GET" && segments[0] === "missions" && segments.length === 1) return json(await listMissions(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
@@ -366,6 +378,13 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (segments[0] === "tasks" && segments.length === 1 && method === "POST") return json(await createAndExecuteTask(ownerId, await body(request)), 201);
   if (segments[0] === "tasks" && segments.length === 1 && method === "GET") return json(await listTasks(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
   if (segments[0] === "tasks" && segments.length === 2 && method === "GET") return json(await ownedTask(ownerId, segments[1]));
+  if (segments[0] === "tasks" && segments.length === 2 && method === "DELETE") {
+    const task = await ownedTask(ownerId, segments[1]);
+    const deletion = canDeleteTaskHistory(task);
+    if (!deletion.allowed) throw new PublicApiError(409, "TASK_ACTIVE", deletion.reason ?? "This task cannot be deleted yet.");
+    if (!await deleteTaskHistory(ownerId, task.id)) throw new PublicApiError(404, "NOT_FOUND", "Task not found.");
+    return new Response(null, { status: 204, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" } });
+  }
   if (segments[0] === "tasks" && segments[2] === "commerce-actions" && method === "POST") return commerceAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-actions" && method === "POST") return flowAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-submission" && method === "POST") return recordFlowSubmission(ownerId, segments[1], request);

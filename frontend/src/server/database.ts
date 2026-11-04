@@ -1,8 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
 import type { BrandProfile, OperatorRoutine, Task } from "@/lib/donads-api";
+import type { Mission } from "@/lib/missions";
+import { missionStateForTask, transactionIntentForTask } from "@/lib/missions";
 import type { UniswapQuote } from "@/server/uniswap";
 
 type ChallengeRow = {
@@ -60,6 +62,90 @@ export async function ensureSchema(): Promise<void> {
       updated_at_ms BIGINT NOT NULL
     )`;
     await db`CREATE INDEX IF NOT EXISTS donads_tasks_owner_updated_idx ON donads_tasks(owner_id, updated_at_ms DESC)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_missions (
+      id UUID PRIMARY KEY,
+      task_id UUID NOT NULL UNIQUE REFERENCES donads_tasks(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      objective TEXT NOT NULL,
+      specialist TEXT NOT NULL,
+      state TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE INDEX IF NOT EXISTS donads_missions_owner_updated_idx ON donads_missions(owner_id, updated_at_ms DESC)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_mission_events (
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL,
+      at_ms BIGINT NOT NULL,
+      PRIMARY KEY(mission_id, sequence)
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_mission_steps (
+      id UUID PRIMARY KEY,
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      specialist TEXT NOT NULL,
+      title TEXT NOT NULL,
+      state TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      started_at_ms BIGINT,
+      completed_at_ms BIGINT,
+      UNIQUE(mission_id, sequence),
+      UNIQUE(owner_id, idempotency_key)
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_mission_attempts (
+      id UUID PRIMARY KEY,
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      step_id UUID NOT NULL REFERENCES donads_mission_steps(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      attempt_number INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      started_at_ms BIGINT NOT NULL,
+      completed_at_ms BIGINT,
+      error_code TEXT,
+      UNIQUE(step_id, attempt_number)
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_transaction_intents (
+      id UUID PRIMARY KEY,
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      task_id UUID NOT NULL REFERENCES donads_tasks(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      chain_id INTEGER NOT NULL,
+      sender TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount TEXT NOT NULL,
+      amount_atomic TEXT,
+      token_contract TEXT,
+      calldata_hash TEXT NOT NULL,
+      state TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      data JSONB NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE(owner_id, idempotency_key)
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_mission_approvals (
+      intent_id UUID PRIMARY KEY REFERENCES donads_transaction_intents(id) ON DELETE CASCADE,
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      evidence JSONB,
+      updated_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE TABLE IF NOT EXISTS donads_transaction_receipts (
+      intent_id UUID PRIMARY KEY REFERENCES donads_transaction_intents(id) ON DELETE CASCADE,
+      mission_id UUID NOT NULL REFERENCES donads_missions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      transaction_hash TEXT NOT NULL,
+      block_number BIGINT NOT NULL,
+      verified_at_ms BIGINT NOT NULL,
+      evidence JSONB NOT NULL
+    )`;
     await db`CREATE TABLE IF NOT EXISTS donads_profiles (
       owner_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -210,16 +296,109 @@ export async function revokeSession(token: string): Promise<void> {
 export async function insertTask(task: Task): Promise<void> {
   await ensureSchema();
   const db = sql();
-  await db`INSERT INTO donads_tasks(id, owner_id, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms)
-    VALUES (${task.id}, ${task.owner_id}, ${task.prompt}, ${task.bot}, ${JSON.stringify(task.input)}, ${JSON.stringify(task.events)}, ${JSON.stringify(task.status)}, ${JSON.stringify(task.feedback)}, ${task.created_at_ms}, ${task.updated_at_ms})`;
+  const missionId = randomUUID();
+  const stepId = randomUUID();
+  const attemptId = randomUUID();
+  const firstEvent = task.events[0];
+  await db.transaction([
+    db`INSERT INTO donads_tasks(id, owner_id, prompt, bot, input, events, status, feedback, created_at_ms, updated_at_ms)
+      VALUES (${task.id}, ${task.owner_id}, ${task.prompt}, ${task.bot}, ${JSON.stringify(task.input)}, ${JSON.stringify(task.events)}, ${JSON.stringify(task.status)}, ${JSON.stringify(task.feedback)}, ${task.created_at_ms}, ${task.updated_at_ms})`,
+    db`INSERT INTO donads_missions(id, task_id, owner_id, objective, specialist, state, version, created_at_ms, updated_at_ms)
+      VALUES (${missionId}, ${task.id}, ${task.owner_id}, ${task.prompt}, ${task.bot}, 'running', 1, ${task.created_at_ms}, ${task.updated_at_ms})`,
+    db`INSERT INTO donads_mission_events(mission_id, owner_id, sequence, kind, message, at_ms)
+      VALUES (${missionId}, ${task.owner_id}, 1, ${firstEvent?.kind ?? "queued"}, ${firstEvent?.message ?? "Mission accepted."}, ${firstEvent?.at_ms ?? task.created_at_ms})`,
+    db`INSERT INTO donads_mission_steps(id, mission_id, owner_id, sequence, specialist, title, state, idempotency_key, started_at_ms)
+      VALUES (${stepId}, ${missionId}, ${task.owner_id}, 1, ${task.bot}, ${task.prompt}, 'running', ${`task:${task.id}:step:1`}, ${task.created_at_ms})`,
+    db`INSERT INTO donads_mission_attempts(id, mission_id, step_id, owner_id, attempt_number, state, started_at_ms)
+      VALUES (${attemptId}, ${missionId}, ${stepId}, ${task.owner_id}, 1, 'running', ${task.created_at_ms})`,
+  ]);
 }
 
 export async function updateTask(task: Task): Promise<void> {
   await ensureSchema();
   const db = sql();
-  await db`UPDATE donads_tasks SET events = ${JSON.stringify(task.events)}, status = ${JSON.stringify(task.status)},
-    feedback = ${JSON.stringify(task.feedback)}, updated_at_ms = ${task.updated_at_ms}
-    WHERE id = ${task.id} AND owner_id = ${task.owner_id}`;
+  const state = missionStateForTask(task);
+  const event = task.events.at(-1) ?? { kind: "updated", message: "Mission updated.", at_ms: task.updated_at_ms };
+  const terminal = ["completed", "failed", "cancelled"].includes(state);
+  const intent = transactionIntentForTask(task);
+  const queries = [
+    db`UPDATE donads_tasks SET events = ${JSON.stringify(task.events)}, status = ${JSON.stringify(task.status)},
+      feedback = ${JSON.stringify(task.feedback)}, updated_at_ms = ${task.updated_at_ms}
+      WHERE id = ${task.id} AND owner_id = ${task.owner_id}`,
+    db`WITH advanced AS (
+        UPDATE donads_missions SET state = ${state}, version = version + 1, updated_at_ms = ${task.updated_at_ms}
+        WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}
+        RETURNING id, owner_id, version
+      )
+      INSERT INTO donads_mission_events(mission_id, owner_id, sequence, kind, message, at_ms)
+      SELECT id, owner_id, version, ${event.kind}, ${event.message}, ${event.at_ms} FROM advanced
+      ON CONFLICT(mission_id, sequence) DO NOTHING`,
+    db`UPDATE donads_mission_steps SET state = ${state}, completed_at_ms = ${terminal ? task.updated_at_ms : null}
+      WHERE mission_id = (SELECT id FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}) AND sequence = 1`,
+    db`UPDATE donads_mission_attempts SET state = ${state}, completed_at_ms = ${terminal ? task.updated_at_ms : null},
+      error_code = ${task.status.state === "failed" ? "SPECIALIST_FAILED" : null}
+      WHERE mission_id = (SELECT id FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}) AND attempt_number = 1`,
+  ];
+  if (intent) {
+    queries.push(db`INSERT INTO donads_transaction_intents(
+        id, mission_id, task_id, owner_id, kind, chain_id, sender, recipient, asset, amount,
+        amount_atomic, token_contract, calldata_hash, state, idempotency_key, data, updated_at_ms
+      ) SELECT ${intent.id}, id, ${task.id}, ${task.owner_id}, ${intent.kind}, ${intent.chain_id}, ${intent.sender},
+        ${intent.recipient}, ${intent.asset}, ${intent.amount}, ${intent.amount_atomic}, ${intent.token_contract},
+        ${intent.calldata_hash}, ${intent.state}, ${intent.idempotency_key}, ${JSON.stringify(intent)}, ${task.updated_at_ms}
+      FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}
+      ON CONFLICT(id) DO UPDATE SET state = EXCLUDED.state, data = EXCLUDED.data, updated_at_ms = EXCLUDED.updated_at_ms`);
+    if (intent.approval) {
+      queries.push(db`INSERT INTO donads_mission_approvals(intent_id, mission_id, owner_id, state, evidence, updated_at_ms)
+        SELECT ${intent.id}, id, ${task.owner_id}, ${intent.state}, ${JSON.stringify(intent.approval)}, ${task.updated_at_ms}
+        FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}
+        ON CONFLICT(intent_id) DO UPDATE SET state = EXCLUDED.state, evidence = EXCLUDED.evidence, updated_at_ms = EXCLUDED.updated_at_ms`);
+    }
+    const execution = intent.execution as { transaction_hash?: string; block_number?: number; confirmed_at_ms?: number } | null;
+    if (execution?.transaction_hash && execution.block_number !== undefined && execution.confirmed_at_ms) {
+      queries.push(db`INSERT INTO donads_transaction_receipts(intent_id, mission_id, owner_id, transaction_hash, block_number, verified_at_ms, evidence)
+        SELECT ${intent.id}, id, ${task.owner_id}, ${execution.transaction_hash}, ${execution.block_number}, ${execution.confirmed_at_ms}, ${JSON.stringify(execution)}
+        FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}
+        ON CONFLICT(intent_id) DO UPDATE SET transaction_hash = EXCLUDED.transaction_hash, block_number = EXCLUDED.block_number,
+          verified_at_ms = EXCLUDED.verified_at_ms, evidence = EXCLUDED.evidence`);
+    }
+  }
+  await db.transaction(queries);
+}
+
+export async function getMission(ownerId: string, id: string): Promise<Mission | null> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT id::text, task_id::text, owner_id, objective, specialist, state, version, created_at_ms, updated_at_ms
+    FROM donads_missions WHERE id = ${id} AND owner_id = ${ownerId} LIMIT 1` as Array<Record<string, unknown>>;
+  if (!rows[0]) return null;
+  return hydrateMission(db, rows[0]);
+}
+
+export async function listMissions(ownerId: string, limit: number): Promise<Mission[]> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT id::text, task_id::text, owner_id, objective, specialist, state, version, created_at_ms, updated_at_ms
+    FROM donads_missions WHERE owner_id = ${ownerId} ORDER BY updated_at_ms DESC LIMIT ${limit}` as Array<Record<string, unknown>>;
+  return Promise.all(rows.map((row) => hydrateMission(db, row)));
+}
+
+export async function countVerifiedTestnetReceipts(ownerId: string): Promise<number> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT COUNT(*)::int AS receipts FROM donads_transaction_receipts WHERE owner_id = ${ownerId}` as Array<{ receipts: number }>;
+  return Number(rows[0]?.receipts ?? 0);
+}
+
+async function hydrateMission(db: NeonQueryFunction<false, false>, row: Record<string, unknown>): Promise<Mission> {
+  const events = await db`SELECT sequence, kind, message, at_ms FROM donads_mission_events
+    WHERE mission_id = ${String(row.id)} AND owner_id = ${String(row.owner_id)} ORDER BY sequence ASC` as Array<Record<string, unknown>>;
+  return {
+    id: String(row.id), task_id: String(row.task_id), owner_id: String(row.owner_id), objective: String(row.objective),
+    specialist: String(row.specialist), state: String(row.state) as Mission["state"], version: Number(row.version),
+    created_at_ms: Number(row.created_at_ms), updated_at_ms: Number(row.updated_at_ms),
+    events: events.map((event) => ({ sequence: Number(event.sequence), kind: String(event.kind), message: String(event.message), at_ms: Number(event.at_ms) })),
+  };
 }
 
 export async function getTask(ownerId: string, id: string): Promise<Task | null> {

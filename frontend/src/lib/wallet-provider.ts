@@ -3,6 +3,8 @@ export type WalletProvider = {
   disconnect?: () => Promise<void>;
 };
 
+import { MONAD_TESTNET } from "@/lib/chain-config";
+
 type WalletConnectProvider = WalletProvider & {
   connect(): Promise<void>;
   session?: unknown;
@@ -20,7 +22,6 @@ declare global {
 
 let activeProvider: WalletProvider | null = null;
 
-const MONAD_TESTNET_CHAIN_HEX = "0x279f";
 const WALLET_CONNECT_TIMEOUT_MS = 120_000;
 
 export class WalletConnectionCancelledError extends Error {
@@ -31,6 +32,8 @@ export class WalletConnectionCancelledError extends Error {
 }
 
 export async function connectWalletConnectProvider(provider: WalletConnectProvider): Promise<void> {
+  if (provider.session) return;
+
   let modalWasOpened = false;
   let unsubscribe: (() => void) | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -54,8 +57,10 @@ export async function connectWalletConnectProvider(provider: WalletConnectProvid
   try {
     await Promise.race([provider.connect(), cancelled]);
   } catch (error) {
-    await provider.disconnect?.().catch(() => undefined);
-    await provider.modal?.close?.();
+    // AppKit teardown can outlive the cancelled connection. Start cleanup, but
+    // never keep the DONADS loading screen blocked on a third-party modal.
+    try { void provider.disconnect?.().catch(() => undefined); } catch { /* no session to clean up */ }
+    try { void Promise.resolve(provider.modal?.close?.()).catch(() => undefined); } catch { /* modal is already closed */ }
     if (error instanceof WalletConnectionCancelledError) throw error;
     if (error instanceof Error && /connection request reset|user (?:closed|rejected|disconnected)|cancel/i.test(error.message)) {
       throw new WalletConnectionCancelledError();
@@ -86,20 +91,24 @@ export function erc20TransferData(recipient: string, amountAtomic: string): `0x$
 
 export async function ensureMonadTestnet(provider: WalletProvider): Promise<void> {
   try {
-    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: MONAD_TESTNET_CHAIN_HEX }] });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: MONAD_TESTNET.chainIdHex }] });
   } catch (reason) {
     const code = typeof reason === "object" && reason !== null && "code" in reason
       ? Number((reason as { code: unknown }).code)
       : 0;
-    if (code !== 4902) throw reason;
+    if (code !== 4902) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (/chainid|chain id|unsupported chain|unsupported network/i.test(message)) throw new Error("This wallet did not approve Monad Testnet. Add Monad Testnet in the wallet, reconnect, or use MetaMask for testnet transactions.");
+      throw reason;
+    }
     await provider.request({
       method: "wallet_addEthereumChain",
       params: [{
-        chainId: MONAD_TESTNET_CHAIN_HEX,
-        chainName: "Monad Testnet",
+        chainId: MONAD_TESTNET.chainIdHex,
+        chainName: MONAD_TESTNET.name,
         nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
-        rpcUrls: ["https://testnet-rpc.monad.xyz"],
-        blockExplorerUrls: ["https://testnet.monadexplorer.com"],
+        rpcUrls: [MONAD_TESTNET.rpcUrl],
+        blockExplorerUrls: [MONAD_TESTNET.explorerUrl],
       }],
     });
   }
@@ -113,10 +122,10 @@ export async function connectWalletProvider(): Promise<WalletProvider> {
     const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
     const provider = await EthereumProvider.init({
       projectId,
-      chains: [10143],
+      chains: [1],
       optionalChains: [10143],
       showQrModal: true,
-      rpcMap: { 10143: "https://testnet-rpc.monad.xyz" },
+      rpcMap: { 1: "https://cloudflare-eth.com", 10143: MONAD_TESTNET.rpcUrl },
       metadata: {
         name: "DONADS",
         description: "Coordinated AI specialists for verifiable tasks on Monad",
@@ -124,6 +133,10 @@ export async function connectWalletProvider(): Promise<WalletProvider> {
         icons: [`${window.location.origin}/brand/donads-mascot-tile.png`],
       },
     });
+    if (provider.session) {
+      activeProvider = provider as WalletProvider;
+      return activeProvider;
+    }
     await connectWalletConnectProvider(provider as WalletConnectProvider);
     activeProvider = provider as WalletProvider;
     return activeProvider;

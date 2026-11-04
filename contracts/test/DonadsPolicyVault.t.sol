@@ -12,9 +12,11 @@ contract SessionActor {
         DonadsPolicyVault vault,
         address payable recipient,
         uint128 amountWei,
-        bytes32 actionHash
+        bytes32 missionId,
+        uint256 nonce,
+        uint64 validUntil
     ) external {
-        vault.executeNative(recipient, amountWei, actionHash);
+        vault.executeNative(recipient, amountWei, missionId, nonce, validUntil);
     }
 
     function pause(DonadsPolicyVault vault) external {
@@ -37,6 +39,11 @@ contract DonadsPolicyVaultTest {
         vault.setRecipientAllowed(address(receiver), true);
     }
 
+    function authorize(uint128 amountWei, bytes32 missionId, uint256 nonce) private returns (uint64 validUntil) {
+        validUntil = uint64(block.timestamp + 1 hours);
+        vault.authorizeNativeAction(address(session), address(receiver), amountWei, missionId, nonce, validUntil);
+    }
+
     function testOwnerAndSessionPolicy() public view {
         require(vault.owner() == address(this), "owner mismatch");
         (
@@ -53,10 +60,13 @@ contract DonadsPolicyVaultTest {
     }
 
     function testRejectsUnapprovedRecipient() public {
+        bytes32 missionId = keccak256("blocked");
+        uint64 validUntil = uint64(block.timestamp + 1 hours);
+        vault.authorizeNativeAction(address(session), address(0xBEEF), 1, missionId, 1, validUntil);
         (bool success,) = address(session).call(
             abi.encodeCall(
                 session.execute,
-                (vault, payable(address(0xBEEF)), 1, keccak256("blocked"))
+                (vault, payable(address(0xBEEF)), 1, missionId, 1, validUntil)
             )
         );
         require(!success, "unapproved recipient accepted");
@@ -65,7 +75,9 @@ contract DonadsPolicyVaultTest {
     function testExecutesBoundedTransferAndAccountsForSpend() public {
         payable(address(vault)).transfer(2 ether);
         uint256 balanceBefore = address(receiver).balance;
-        session.execute(vault, payable(address(receiver)), 2 ether, keccak256("bounded"));
+        bytes32 missionId = keccak256("bounded");
+        uint64 validUntil = authorize(2 ether, missionId, 1);
+        session.execute(vault, payable(address(receiver)), 2 ether, missionId, 1, validUntil);
 
         (,,, uint128 spentToday,,) = vault.sessions(address(session));
         require(spentToday == 2 ether, "spend not accounted");
@@ -74,29 +86,36 @@ contract DonadsPolicyVaultTest {
 
     function testRejectsReplay() public {
         payable(address(vault)).transfer(2);
-        bytes32 actionHash = keccak256("one-action");
-        session.execute(vault, payable(address(receiver)), 1, actionHash);
+        bytes32 missionId = keccak256("one-action");
+        uint64 validUntil = authorize(1, missionId, 1);
+        session.execute(vault, payable(address(receiver)), 1, missionId, 1, validUntil);
         (bool success,) = address(session).call(
-            abi.encodeCall(session.execute, (vault, payable(address(receiver)), 1, actionHash))
+            abi.encodeCall(session.execute, (vault, payable(address(receiver)), 1, missionId, 1, validUntil))
         );
         require(!success, "replayed action accepted");
     }
 
     function testEnforcesPerTransactionAndDailyLimits() public {
         payable(address(vault)).transfer(4 ether);
+        bytes32 overMission = keccak256("over-per-tx");
+        uint64 overExpiry = authorize(uint128(2 ether + 1), overMission, 1);
         (bool overPerTransaction,) = address(session).call(
             abi.encodeCall(
                 session.execute,
-                (vault, payable(address(receiver)), uint128(2 ether + 1), keccak256("over-per-tx"))
+                (vault, payable(address(receiver)), uint128(2 ether + 1), overMission, 1, overExpiry)
             )
         );
         require(!overPerTransaction, "per-transaction limit bypassed");
 
-        session.execute(vault, payable(address(receiver)), 2 ether, keccak256("daily-first"));
+        bytes32 firstMission = keccak256("daily-first");
+        uint64 firstExpiry = authorize(2 ether, firstMission, 2);
+        session.execute(vault, payable(address(receiver)), 2 ether, firstMission, 2, firstExpiry);
+        bytes32 secondMission = keccak256("daily-second");
+        uint64 secondExpiry = authorize(2 ether, secondMission, 3);
         (bool overDaily,) = address(session).call(
             abi.encodeCall(
                 session.execute,
-                (vault, payable(address(receiver)), 2 ether, keccak256("daily-second"))
+                (vault, payable(address(receiver)), 2 ether, secondMission, 3, secondExpiry)
             )
         );
         require(!overDaily, "daily limit bypassed");
@@ -104,10 +123,12 @@ contract DonadsPolicyVaultTest {
 
     function testRevocationBlocksSession() public {
         vault.revokeSession(address(session));
+        bytes32 missionId = keccak256("revoked");
+        uint64 validUntil = authorize(1, missionId, 1);
         (bool success,) = address(session).call(
             abi.encodeCall(
                 session.execute,
-                (vault, payable(address(receiver)), 1, keccak256("revoked"))
+                (vault, payable(address(receiver)), 1, missionId, 1, validUntil)
             )
         );
         require(!success, "revoked session executed");
@@ -115,10 +136,12 @@ contract DonadsPolicyVaultTest {
 
     function testKillSwitchBlocksExecution() public {
         vault.setPaused(true);
+        bytes32 missionId = keccak256("paused");
+        uint64 validUntil = authorize(1, missionId, 1);
         (bool success,) = address(session).call(
             abi.encodeCall(
                 session.execute,
-                (vault, payable(address(receiver)), 1, keccak256("paused"))
+                (vault, payable(address(receiver)), 1, missionId, 1, validUntil)
             )
         );
         require(!success, "paused vault executed");
@@ -127,5 +150,16 @@ contract DonadsPolicyVaultTest {
     function testRejectsNonOwnerAdministration() public {
         (bool success,) = address(session).call(abi.encodeCall(session.pause, (vault)));
         require(!success, "non-owner paused vault");
+    }
+
+    function testRejectsInventedActionHash() public {
+        payable(address(vault)).transfer(1);
+        (bool success,) = address(session).call(
+            abi.encodeCall(
+                session.execute,
+                (vault, payable(address(receiver)), 1, keccak256("invented"), 99, uint64(block.timestamp + 1 hours))
+            )
+        );
+        require(!success, "session invented an unauthorized action");
     }
 }

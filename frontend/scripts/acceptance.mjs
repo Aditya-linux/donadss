@@ -42,6 +42,10 @@ const tokenBalances = await request("/api/v1/wallet/token-balances", {}, token);
 assert(tokenBalances.response.ok && Array.isArray(tokenBalances.payload), "ERC-20 balance endpoint failed.");
 const pushConfig = await request("/api/v1/push/config", {}, token);
 assert(pushConfig.response.ok && typeof pushConfig.payload.configured === "boolean", "Web Push configuration endpoint failed.");
+const connectors = await request("/api/v1/connectors", {}, token);
+assert(connectors.response.ok && Array.isArray(connectors.payload) && connectors.payload.every((connector) => connector.financial_authority === false), "Connector catalog did not fail closed on financial authority.");
+const readiness = await request("/api/v1/readiness/mainnet", {}, token);
+assert(readiness.response.ok && readiness.payload.ready === false && readiness.payload.network_enabled === false, "Mainnet readiness gate must remain disabled.");
 
 const unfundedTokenTransfer = await request("/api/v1/tasks", {
   method: "POST",
@@ -72,6 +76,8 @@ const created = await request("/api/v1/tasks", {
 assert(created.response.status === 201, `Task creation failed: ${JSON.stringify(created.payload)}`);
 assert(created.payload.status.state === "completed", "Sentinel task did not complete.");
 assert(created.payload.status.data.findings[0]?.id === "SELFDESTRUCT_REACHABLE", "Expected Sentinel finding was absent.");
+const missions = await request("/api/v1/missions?limit=20", {}, token);
+assert(missions.response.ok && missions.payload.some((mission) => mission.task_id === created.payload.id && mission.events.length >= 2), "Persistent Mission projection was not created for the accepted task.");
 
 const flow = await request("/api/v1/tasks", {
   method: "POST",
@@ -199,6 +205,9 @@ console.log(JSON.stringify({
   erc20_unfunded_policy: unfundedTokenTransfer.payload.status.state,
   dex_adapter_state: dexQuote.response.ok ? "quoted" : "disabled_no_official_bytecode",
   push_configured: pushConfig.payload.configured,
+  connector_count: connectors.payload.length,
+  mainnet_enabled: readiness.payload.network_enabled,
+  persistent_mission: missions.payload.some((mission) => mission.task_id === created.payload.id),
   ai_remaining_today: aiUsage.payload.remaining_today,
   ai_configured: aiUsage.payload.configured,
   flow_submission_checkpoint: flowSubmitted.payload.status.data.workflow.state,

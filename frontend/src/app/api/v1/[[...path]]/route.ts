@@ -22,8 +22,11 @@ import {
   getTask,
   getSwapQuote as loadSwapQuote,
   completeSwapQuote,
+  countVerifiedTestnetReceipts,
   deletePushSubscription,
   listRoutines,
+  listMissions,
+  getMission,
   listTasks,
   putProfile,
   putRoutine,
@@ -31,6 +34,7 @@ import {
   putSwapQuote,
   updateTask,
 } from "@/server/database";
+import { assertTrustedOrigin, readJsonObject, safeFailure } from "@/server/api-security";
 import { geminiConfigured } from "@/server/gemini";
 import { planTask } from "@/server/ai-planner";
 import { taskEvent } from "@/server/donads-types";
@@ -39,6 +43,9 @@ import { createAndExecuteTask } from "@/server/tasks";
 import { operatorWorkflow } from "@/workflows/operator";
 import { quoteUniswapSwap } from "@/server/uniswap";
 import { publicVapidKey, sendCheckpointNotification } from "@/server/push";
+import { connectorCatalog } from "@/server/connectors";
+import { mainnetReadiness } from "@/server/mainnet-readiness";
+import { assessThreat } from "@/server/threat-intelligence";
 
 export const maxDuration = 300;
 
@@ -56,18 +63,13 @@ function json(value: unknown, status = 200): Response {
 }
 
 function failure(cause: unknown): Response {
-  const message = cause instanceof Error ? cause.message : "Unexpected DONADS API error.";
-  if (message === "AUTH_REQUIRED") return json({ error: "Sign in with your wallet to continue." }, 401);
-  if (/not found/i.test(message)) return json({ error: message }, 404);
-  if (/DATABASE_URL/.test(message)) return json({ error: "Persistent storage is not connected to this deployment." }, 503);
-  console.error("DONADS API error", cause);
-  return json({ error: message }, 400);
+  const safe = safeFailure(cause);
+  if (safe.status >= 500) console.error("DONADS API internal error", cause);
+  return json({ error: safe.message, code: safe.code }, safe.status);
 }
 
 async function body(request: Request): Promise<Record<string, unknown>> {
-  const value = await request.json();
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Request body must be a JSON object.");
-  return value as Record<string, unknown>;
+  return readJsonObject(request);
 }
 
 async function ownedTask(ownerId: string, id: string): Promise<Task> {
@@ -254,6 +256,7 @@ async function operatorAction(ownerId: string, id: string, request: Request): Pr
 }
 
 async function route(request: Request, context: Context): Promise<Response> {
+  assertTrustedOrigin(request);
   const segments = (await context.params).path ?? [];
   const method = request.method;
   if (method === "GET" && segments[0] === "health") return json({ status: "ok", network: "testnet", chain_id: 10143, persistence: "postgres", deployment: "vercel" });
@@ -290,6 +293,14 @@ async function route(request: Request, context: Context): Promise<Response> {
     const payload = await body(request); await deletePushSubscription(ownerId, String(payload.endpoint ?? "")); return new Response(null, { status: 204 });
   }
   if (method === "GET" && segments.join("/") === "approvals") return json(pendingApprovals(await listTasks(ownerId, 100)));
+  if (method === "GET" && segments.join("/") === "connectors") return json(connectorCatalog());
+  if (method === "GET" && segments.join("/") === "readiness/mainnet") return json(mainnetReadiness(await countVerifiedTestnetReceipts(ownerId)));
+  if (method === "GET" && segments[0] === "missions" && segments.length === 1) return json(await listMissions(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
+  if (method === "GET" && segments[0] === "missions" && segments.length === 2) {
+    const mission = await getMission(ownerId, segments[1]);
+    if (!mission) throw new Error("Mission not found.");
+    return json(mission);
+  }
   if (method === "GET" && segments.join("/") === "wallet/balance") {
     const value = String(await monadRpc("eth_getBalance", [ownerId, "latest"]));
     return json({ address: ownerId, chain_id: 10143, network: "Monad Testnet", symbol: "MON", balance_atomic: BigInt(value).toString(), balance_mon: formatEther(BigInt(value)) });
@@ -317,6 +328,15 @@ async function route(request: Request, context: Context): Promise<Response> {
       used_today: used, remaining_today: Math.max(0, DONADS_AI_POLICY.requestsPerDayPerWallet - used), resets_at_ms: resetAtMs,
       limits: DONADS_AI_POLICY,
     });
+  }
+  if (method === "POST" && segments.join("/") === "security/preflight") {
+    const payload = await body(request);
+    const text = String(payload.text ?? "").trim();
+    if (!text) throw new Error("Text or a link is required for Sentinel preflight.");
+    if (text.length > 20_000) throw new Error("Sentinel preflight input exceeds 20,000 characters.");
+    const urls = Array.isArray(payload.urls) ? payload.urls.map(String).slice(0, 10) : undefined;
+    const transactionData = typeof payload.transaction_data === "string" ? payload.transaction_data : undefined;
+    return json(assessThreat({ text, urls, transactionData }));
   }
   if (method === "POST" && segments.join("/") === "ai/plan") {
     const payload = await body(request);

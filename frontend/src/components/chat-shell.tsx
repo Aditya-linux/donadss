@@ -1,12 +1,13 @@
 "use client";
 
-import { Bell, CircleDollarSign, Clock3, Coins, Gauge, Layers3, Menu, Megaphone, MessageSquarePlus, Radar, ShieldCheck, ShoppingBag, WalletCards, Workflow, X } from "lucide-react";
+import { Bell, CircleDollarSign, Clock3, Coins, Gauge, Link2, Menu, Megaphone, MessageSquarePlus, Radar, ShieldCheck, ShoppingBag, WalletCards, Workflow, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MascotLoader, MascotMark, SpecialistMark } from "@/components/mascot";
 import { UnifiedTaskWorkspace } from "@/components/unified-task-workspace";
+import { ConnectionsDialog } from "@/components/connections-dialog";
 import { createAuthChallenge, getAiUsage, getPushConfig, getTask, getWalletBalance, getWalletTokenBalances, listPendingApprovals, listTaskHistory, restoreWalletSession, revokeWalletSession, setAccessToken, type AiUsage, type Task, type TokenBalance, type WalletBalance, verifyWalletSignature } from "@/lib/donads-api";
 import type { PendingApproval } from "@/lib/approvals";
-import { connectWalletProvider, disconnectWalletProvider } from "@/lib/wallet-provider";
+import { connectWalletProvider, disconnectWalletProvider, WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import { currentPushSubscription, disablePushNotifications, enablePushNotifications, pushSupported } from "@/lib/push-client";
 
 const specialists = [
@@ -84,7 +85,7 @@ function Sidebar({ open, onClose, onNewTask, onSpecialist, onHistory, history, h
       <button type="button" onClick={onNewTask} className="mt-3 flex min-h-11 items-center gap-3 rounded-xl border border-border bg-background px-3 text-sm font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px"><MessageSquarePlus className="size-4" aria-hidden="true" />New task</button>
       <section className="mt-6" aria-labelledby="specialists-title"><p id="specialists-title" className="px-3 pb-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Specialists</p><ul className="space-y-1">{specialists.map((specialist) => { const Icon = specialist.icon; return <li key={specialist.id}><button type="button" onClick={() => onSpecialist(specialist)} aria-label={`Learn about ${specialist.name}`} className="flex min-h-12 w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px"><SpecialistMark icon={Icon} size={36} /><span className="min-w-0"><span className="block text-sm font-medium">{specialist.name}</span><span className="block truncate text-xs text-muted-foreground">{specialist.specialty}</span></span></button></li>; })}</ul></section>
       <section className="mt-5 min-h-0" aria-label="Task history"><p className="px-3 pb-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">History</p>{!historyReady ? <div className="space-y-2 px-3" aria-label="Loading task history">{[1,2].map((item) => <div key={item} className="h-10 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" />)}</div> : history.length ? <ol className="max-h-40 space-y-1 overflow-y-auto">{history.map((task) => <li key={task.id}><button type="button" onClick={() => onHistory(task)} className="w-full rounded-lg px-3 py-2 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"><p className="truncate text-xs font-medium">{task.prompt}</p><p className="mt-0.5 text-xs capitalize text-muted-foreground">{task.bot} · {task.status.state}</p></button></li>)}</ol> : <p className="px-3 py-2 text-xs leading-5 text-muted-foreground">No tasks yet. Your completed work will appear here.</p>}</section>
-      <div className="mt-auto space-y-2">{aiUsage ? <section className="rounded-xl border border-border bg-background p-3" aria-label="AI usage"><div className="flex items-center gap-2 text-xs font-semibold"><Gauge className="size-4" aria-hidden="true" />AI allowance</div><p className="mt-2 font-mono text-sm tabular-nums"><strong>{aiUsage.remaining_today}</strong> of {aiUsage.limits.requestsPerDayPerWallet} requests remaining today</p><p className="mt-1 text-xs text-muted-foreground">Resets in {resetLabel(aiUsage.resets_at_ms)}{aiUsage.configured ? "" : " · Gemini key pending"}</p></section> : null}<div className="rounded-xl bg-muted p-3"><div className="flex items-center gap-2 text-xs font-semibold"><Layers3 className="size-4" aria-hidden="true" />One goal. The right specialists.</div><p className="mt-1.5 text-xs leading-5 text-muted-foreground">Operator coordinates only the skills your task needs. Your wallet stays in control.</p></div></div>
+      {aiUsage ? <section className="mt-auto rounded-xl border border-border bg-background px-3 py-2.5" aria-label="AI usage"><div className="flex items-center justify-between gap-3"><span className="inline-flex items-center gap-2 text-xs font-medium"><Gauge className="size-4" aria-hidden="true" />AI</span><span className="font-mono text-xs tabular-nums"><strong>{aiUsage.remaining_today}</strong>/{aiUsage.limits.requestsPerDayPerWallet} today</span></div><p className="mt-1 truncate text-[11px] text-muted-foreground">Resets in {resetLabel(aiUsage.resets_at_ms)}{aiUsage.configured ? "" : " · API key pending"}</p></section> : null}
     </aside>
   </>;
 }
@@ -107,6 +108,7 @@ export function ChatShell() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [tokenBalances, setTokenBalances] = useState<TokenBalance[]>([]);
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
 
   async function loadWalletData() { const [tasks, walletBalance, tokenValues, usage, pending] = await Promise.all([listTaskHistory(30), getWalletBalance(), getWalletTokenBalances(), getAiUsage(), listPendingApprovals()]); setHistory(tasks); setBalance(walletBalance); setTokenBalances(tokenValues); setAiUsage(usage); setApprovals(pending); setHistoryReady(true); }
 
@@ -124,7 +126,10 @@ export function ChatShell() {
   async function signIn() {
     setSigningIn(true); setAuthError(null);
     try { const provider = await connectWalletProvider(); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
-    catch (error) { await disconnectWalletProvider().catch(() => undefined); setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setHistoryReady(true); setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed."); }
+    catch (error) {
+      setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setHistoryReady(true);
+      if (!(error instanceof WalletConnectionCancelledError)) setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed.");
+    }
     finally { setSigningIn(false); }
   }
 
@@ -149,12 +154,14 @@ export function ChatShell() {
     {selectedSpecialist ? <SpecialistDialog specialist={selectedSpecialist} onClose={closeSpecialist} /> : null}
     {approvalInboxOpen ? <ApprovalDialog approvals={approvals} onClose={() => setApprovalInboxOpen(false)} onReview={(approval) => void reviewApproval(approval)} /> : null}
     {balanceDialogOpen && balance ? <BalanceDialog native={balance} tokens={tokenBalances} onClose={() => setBalanceDialogOpen(false)} /> : null}
+    {connectionsOpen ? <ConnectionsDialog onClose={() => setConnectionsOpen(false)} /> : null}
     <Sidebar open={sidebarOpen} history={history} historyReady={historyReady} aiUsage={aiUsage} onClose={() => setSidebarOpen(false)} onNewTask={() => { setSelectedTask(null); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} onSpecialist={(specialist) => { specialistTrigger.current = document.activeElement as HTMLElement; setSelectedSpecialist(specialist); }} onHistory={(task) => { setSelectedTask(task); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} />
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex min-h-16 shrink-0 items-center gap-2 border-b border-border px-3 sm:px-5">
         <button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)} className="grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring lg:hidden"><Menu className="size-5" aria-hidden="true" /></button>
         <div className="flex items-center gap-2 text-sm font-semibold"><MascotMark size={28} /><span className="hidden sm:inline">Task workspace</span></div>
         <div className="ml-auto flex items-center gap-2">
+          {signedInWallet ? <button type="button" aria-label="Open connected apps and mainnet readiness" onClick={() => setConnectionsOpen(true)} className="grid size-10 place-items-center rounded-full border border-border hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><Link2 className="size-4" aria-hidden="true" /></button> : null}
           {signedInWallet ? <button type="button" aria-label={`Open action inbox${approvals.length ? `, ${approvals.length} pending` : ""}`} onClick={() => setApprovalInboxOpen(true)} className="relative grid size-10 place-items-center rounded-full border border-border hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><Bell className="size-4" aria-hidden="true" />{approvals.length ? <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 font-mono text-[10px] font-semibold text-destructive-foreground">{Math.min(99, approvals.length)}</span> : null}</button> : null}
           {signedInWallet && balance ? <button type="button" aria-label="View Testnet token balances" onClick={() => setBalanceDialogOpen(true)} className="min-h-10 rounded-full bg-muted px-3 text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><span className="hidden font-mono tabular-nums sm:inline">{Number(balance.balance_mon).toLocaleString(undefined, { maximumFractionDigits: 4 })} MON</span><span className="sm:ml-2 text-muted-foreground">Balances</span></button> : null}
           <button type="button" aria-label={signedInWallet ? "Sign out wallet session" : "Connect wallet"} onClick={() => void (signedInWallet ? signOut() : signIn())} disabled={signingIn} className="flex min-h-10 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-60"><WalletCards className="size-4" aria-hidden="true" />{signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : "Connect wallet"}</button>

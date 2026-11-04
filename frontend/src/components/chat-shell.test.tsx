@@ -1,10 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import { ChatShell } from "./chat-shell";
 
+const walletMocks = vi.hoisted(() => ({ connect: vi.fn() }));
+
+vi.mock("@/lib/wallet-provider", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/wallet-provider")>(),
+  connectWalletProvider: walletMocks.connect,
+}));
+
 describe("ChatShell", () => {
-  afterEach(() => { vi.unstubAllGlobals(); window.localStorage.clear(); });
+  afterEach(() => { vi.unstubAllGlobals(); walletMocks.connect.mockReset(); window.localStorage.clear(); });
 
   it("uses one task surface and opens informational specialist details", async () => {
     const user = userEvent.setup();
@@ -34,5 +42,19 @@ describe("ChatShell", () => {
     expect(screen.getByText("notes.md")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove notes.md" }));
     expect(screen.queryByText("notes.md")).not.toBeInTheDocument();
+  });
+
+  it("returns to the idle workspace when the wallet chooser is cancelled", async () => {
+    walletMocks.connect.mockRejectedValueOnce(new WalletConnectionCancelledError());
+    const user = userEvent.setup();
+    render(<ChatShell />);
+
+    const connectButton = screen.getByRole("button", { name: "Connect wallet" });
+    await user.click(connectButton);
+
+    await waitFor(() => expect(connectButton).toBeEnabled());
+    expect(screen.queryByText("Opening the wallet chooser…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
   });
 });

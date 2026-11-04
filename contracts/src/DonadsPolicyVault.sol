@@ -22,6 +22,7 @@ contract DonadsPolicyVault {
     mapping(address sessionKey => SessionPolicy policy) public sessions;
     mapping(address recipient => bool allowed) public allowedRecipients;
     mapping(bytes32 actionHash => bool consumed) public consumedActions;
+    mapping(bytes32 actionHash => uint64 validUntil) public authorizedActions;
 
     event Deposited(address indexed sender, uint256 amount);
     event SessionConfigured(address indexed sessionKey, uint64 expiresAt, uint128 perTransactionLimitWei, uint128 dailyLimitWei);
@@ -30,6 +31,7 @@ contract DonadsPolicyVault {
     event ShippingAddressHashSet(bytes32 indexed shippingAddressHash);
     event PauseSet(bool paused);
     event NativeTransferExecuted(bytes32 indexed actionHash, address indexed sessionKey, address indexed recipient, uint256 amount);
+    event NativeActionAuthorized(bytes32 indexed actionHash, address indexed sessionKey, bytes32 indexed missionId, uint64 validUntil);
     event OwnerWithdrawal(address indexed recipient, uint256 amount);
 
     error OnlyOwner();
@@ -42,6 +44,8 @@ contract DonadsPolicyVault {
     error PerTransactionLimitExceeded();
     error DailyLimitExceeded();
     error ActionAlreadyConsumed();
+    error ActionNotAuthorized();
+    error ActionAuthorizationExpired();
     error TransferFailed();
 
     modifier onlyOwner() {
@@ -108,10 +112,56 @@ contract DonadsPolicyVault {
         emit PauseSet(newPaused);
     }
 
-    function executeNative(address payable recipient, uint128 amountWei, bytes32 actionHash)
-        external
-        nonReentrant
-    {
+    /// @notice Authorizes one exact delegated native transfer.
+    /// @dev The hash binds the action to this chain and vault so it cannot be
+    /// replayed against another deployment. The owner may authorize off the
+    /// critical execution path, while the session submits the exact action.
+    function authorizeNativeAction(
+        address sessionKey,
+        address recipient,
+        uint128 amountWei,
+        bytes32 missionId,
+        uint256 nonce,
+        uint64 validUntil
+    ) external onlyOwner returns (bytes32 actionHash) {
+        if (sessionKey == address(0) || recipient == address(0)) revert InvalidAddress();
+        if (amountWei == 0 || validUntil <= block.timestamp) revert InvalidPolicy();
+        actionHash = nativeActionHash(sessionKey, recipient, amountWei, missionId, nonce, validUntil);
+        if (consumedActions[actionHash]) revert ActionAlreadyConsumed();
+        authorizedActions[actionHash] = validUntil;
+        emit NativeActionAuthorized(actionHash, sessionKey, missionId, validUntil);
+    }
+
+    function nativeActionHash(
+        address sessionKey,
+        address recipient,
+        uint128 amountWei,
+        bytes32 missionId,
+        uint256 nonce,
+        uint64 validUntil
+    ) public view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("DONADS_NATIVE_ACTION_V1"),
+                block.chainid,
+                address(this),
+                sessionKey,
+                recipient,
+                amountWei,
+                missionId,
+                nonce,
+                validUntil
+            )
+        );
+    }
+
+    function executeNative(
+        address payable recipient,
+        uint128 amountWei,
+        bytes32 missionId,
+        uint256 nonce,
+        uint64 validUntil
+    ) external nonReentrant {
         if (paused) revert VaultPaused();
         SessionPolicy storage policy = sessions[msg.sender];
         if (!policy.active || policy.expiresAt < block.timestamp) revert SessionUnavailable();
@@ -119,7 +169,11 @@ contract DonadsPolicyVault {
         if (amountWei == 0 || amountWei > policy.perTransactionLimitWei) {
             revert PerTransactionLimitExceeded();
         }
+        bytes32 actionHash = nativeActionHash(msg.sender, recipient, amountWei, missionId, nonce, validUntil);
         if (consumedActions[actionHash]) revert ActionAlreadyConsumed();
+        uint64 authorizedUntil = authorizedActions[actionHash];
+        if (authorizedUntil == 0 || authorizedUntil != validUntil) revert ActionNotAuthorized();
+        if (validUntil < block.timestamp) revert ActionAuthorizationExpired();
 
         uint64 today = uint64(block.timestamp / 1 days);
         if (policy.spendingDay != today) {
@@ -131,6 +185,7 @@ contract DonadsPolicyVault {
 
         policy.spentTodayWei = nextSpent;
         consumedActions[actionHash] = true;
+        delete authorizedActions[actionHash];
         (bool sent,) = recipient.call{ value: amountWei }("");
         if (!sent) revert TransferFailed();
         emit NativeTransferExecuted(actionHash, msg.sender, recipient, amountWei);

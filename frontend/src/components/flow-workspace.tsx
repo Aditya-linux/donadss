@@ -13,6 +13,7 @@ import {
   recordFlowSubmission,
   waitForTask,
 } from "@/lib/donads-api";
+import { testnetTransactionUrl } from "@/lib/chain-config";
 import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
 import {
   connectWalletProvider,
@@ -171,7 +172,7 @@ export function FlowWorkspace() {
             {workflow.payouts.map((payout, index) => <div key={index} className="rounded-xl border border-border p-4"><p className="font-medium">{payout.amount} MON</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{payout.recipient_address}</p></div>)}
             <div className="rounded-xl bg-muted p-4 text-sm"><ShieldCheck className="mb-2 size-5" />State: <span className="font-mono">{workflow.state}</span>. Completion requires a successful RPC receipt matching this exact intent.</div>
             {actionable ? <div className="flex flex-wrap gap-3"><button disabled={working} onClick={() => void authorizeAndSend()} className="min-h-11 rounded-xl bg-primary px-4 text-sm text-primary-foreground">{working ? "Waiting for confirmation…" : workflow.state === "submitted" ? "Verify submitted transaction" : "Approve in wallet and send"}</button>{workflow.state === "awaiting_approval" ? <button disabled={working} onClick={() => void reject()} className="min-h-11 rounded-xl border border-border px-4 text-sm">Reject</button> : null}</div> : null}
-            {workflow.execution ? <a className="inline-flex items-center gap-2 text-sm underline" href={`https://testnet.monadexplorer.com/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer">Verified transaction <ExternalLink className="size-4" /></a> : null}
+            {workflow.execution ? <a className="inline-flex items-center gap-2 text-sm underline" href={testnetTransactionUrl(workflow.execution.transaction_hash)} target="_blank" rel="noreferrer">Verified on MonadScan <ExternalLink className="size-4" /></a> : null}
           </section>
         )}
         {task ? <ReportDownloadButton task={task} /> : null}

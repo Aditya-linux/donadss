@@ -426,6 +426,13 @@ export async function getAiUsage(): Promise<AiUsage> {
   return readJson(response);
 }
 
+export type ThreatReport = import("@/server/threat-intelligence").ThreatReport;
+
+export async function preflightThreats(input: { text: string; urls?: string[]; transaction_data?: string }, signal?: AbortSignal): Promise<ThreatReport> {
+  const response = await apiFetch(`${API_URL}/v1/security/preflight`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+  return readJson(response);
+}
+
 export async function planAiTask(prompt: string, attachments: AiAttachmentInput[] = []): Promise<{ plan: import("@/lib/task-planner").UnifiedPlan; mode: "model" | "deterministic"; fallback_reason: string | null }> {
   const response = await apiFetch(`${API_URL}/v1/ai/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, attachments }) });
   return readJson(response);
@@ -835,6 +842,37 @@ export async function listTaskHistory(
     signal,
   });
   return readJson<Task[]>(response);
+}
+
+export async function listMissions(
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<import("@/lib/missions").Mission[]> {
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+  const response = await apiFetch(`${API_URL}/v1/missions?limit=${safeLimit}`, { signal });
+  return readJson(response);
+}
+
+export async function getMission(
+  id: string,
+  signal?: AbortSignal,
+): Promise<import("@/lib/missions").Mission> {
+  const response = await apiFetch(`${API_URL}/v1/missions/${encodeURIComponent(id)}`, { signal });
+  return readJson(response);
+}
+
+export type ConnectorSummary = import("@/server/connectors").ConnectorSummary;
+
+export async function listConnectors(signal?: AbortSignal): Promise<ConnectorSummary[]> {
+  const response = await apiFetch(`${API_URL}/v1/connectors`, { signal });
+  return readJson(response);
+}
+
+export type MainnetReadiness = ReturnType<typeof import("@/server/mainnet-readiness").mainnetReadiness>;
+
+export async function getMainnetReadiness(signal?: AbortSignal): Promise<MainnetReadiness> {
+  const response = await apiFetch(`${API_URL}/v1/readiness/mainnet`, { signal });
+  return readJson(response);
 }
 
 export async function listPendingApprovals(

@@ -24,6 +24,14 @@
 /WhatsApp Video *.mp4
 
 # Superseded local planning and phase-review artifacts are kept outside the active repository.
-/docs/
+!/docs/
+/docs/*
+!/docs/architecture/
+/docs/architecture/*
+!/docs/architecture/current-state.md
+!/docs/architecture/decisions.md
+!/docs/acceptance-matrix.md
+!/docs/connected-apps.md
+!/docs/mainnet-runbook.md
 /plan.txt
 /spin.txt

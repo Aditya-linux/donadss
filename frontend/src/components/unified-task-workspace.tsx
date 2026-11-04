@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, CheckCircle2, CircleDollarSign, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
+import { ArrowUp, CheckCircle2, ChevronRight, CircleDollarSign, Clock3, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { decodeFunctionResult, encodeDeployData, encodeFunctionData, getAddress, keccak256, stringToHex } from "viem";
@@ -27,15 +27,17 @@ import {
   waitForOperator,
   waitForTask,
   planAiTask,
+  preflightThreats,
   recordFlowSubmission,
 } from "@/lib/donads-api";
 import { planUnifiedTask } from "@/lib/task-planner";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
 import { connectWalletProvider, ensureMonadTestnet, erc20TransferData, monToWeiHex } from "@/lib/wallet-provider";
+import { formatTaskDuration, MONAD_TESTNET_EXPLORER, taskCompletionTime } from "@/lib/task-receipt";
 import { DonadsEscrowAbi, DonadsEscrowBytecode, DonadsPolicyVaultAbi, DonadsPolicyVaultBytecode } from "@/contracts/generated";
 
-type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask; swapQuote?: SwapQuote };
+type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask; swapQuote?: SwapQuote; durationMs?: number; transactionHashes?: string[] };
 type Attachment = { id: string; file: File; previewUrl: string | null; textContent: string | null };
 
 const MAX_ATTACHMENTS = DONADS_AI_POLICY.maxAttachmentsPerTask;
@@ -99,6 +101,33 @@ function historyMessages(task: Task | null): Message[] {
   ];
 }
 
+function TaskTiming({ task, durationMs }: { task?: CompletedTask; durationMs?: number }) {
+  const startedAt = task?.created_at_ms;
+  const finishedAt = task ? taskCompletionTime(task) : undefined;
+  const elapsed = durationMs ?? (startedAt !== undefined && finishedAt !== undefined ? finishedAt - startedAt : undefined);
+  if (elapsed === undefined) return null;
+
+  return <details className="group mt-3 w-fit text-xs text-muted-foreground">
+    <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 rounded-lg px-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <Clock3 className="size-4" aria-hidden="true" />
+      <span>Worked for {formatTaskDuration(elapsed)}</span>
+      <ChevronRight className="size-4 transition-transform group-open:rotate-90" aria-hidden="true" />
+    </summary>
+    {startedAt !== undefined && finishedAt !== undefined ? <dl className="ml-8 grid gap-1 pb-1">
+      <div><dt className="inline">Started </dt><dd className="inline font-mono">{new Date(startedAt).toLocaleString()}</dd></div>
+      <div><dt className="inline">Finished </dt><dd className="inline font-mono">{new Date(finishedAt).toLocaleString()}</dd></div>
+    </dl> : <p className="ml-8 pb-1">Measured through the confirmed wallet receipt.</p>}
+  </details>;
+}
+
+function TransactionLinks({ hashes }: { hashes?: string[] }) {
+  if (!hashes?.length) return null;
+  return <div className="mt-2 flex flex-wrap gap-2">{hashes.map((hash, index) => <a key={hash} href={`${MONAD_TESTNET_EXPLORER}/tx/${hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 rounded-lg px-2 text-xs font-medium underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    {hashes.length > 1 ? `View transaction ${index + 1}` : "View on MonadVision"}
+    <ExternalLink className="size-3.5" aria-hidden="true" />
+  </a>)}</div>;
+}
+
 function fileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
 }
@@ -112,7 +141,7 @@ function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowComp
     <div><p className="font-mono text-base font-semibold tabular-nums">{payout.amount} {payout.asset}</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">To {payout.recipient_address}</p>{payout.token_contract ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">Token {payout.token_contract}</p> : null}</div>
     <p className="text-xs leading-5 text-muted-foreground">Your wallet must show this exact recipient and amount. DONADS reports completion only after the mined receipt matches both.</p>
     {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transaction" : "Approve in wallet and send"}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
-    {workflow.execution ? <a href={`https://testnet.monadexplorer.com/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">View verified transaction <ExternalLink className="size-3.5" aria-hidden="true" /></a> : null}
+    {workflow.execution ? <a href={`${MONAD_TESTNET_EXPLORER}/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">View verified transaction <ExternalLink className="size-3.5" aria-hidden="true" /></a> : null}
   </div>;
 }
 
@@ -185,7 +214,15 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
     controller.current?.abort();
     controller.current = new AbortController();
     const signal = controller.current.signal;
+    const executionStartedAt = currentTimeMs();
     try {
+      setProgress("Sentinel is checking links and scam signalsâ€¦");
+      const preflight = await preflightThreats({ text: value }, signal);
+      if (preflight.blocked) {
+        const details = preflight.findings.slice(0, 3).map((finding) => `${finding.message} (${finding.evidence})`).join(" ");
+        setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `${preflight.summary} ${details} No wallet or browser action was started. This screening does not guarantee safety.` }]);
+        return;
+      }
       plan = (await planAiTask(value, modelAttachments)).plan;
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
@@ -201,7 +238,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from, data: DonadsPolicyVaultBytecode, value: "0x0" }] }) as string;
           const receipt = await waitForWalletReceipt(provider, hash);
           if (!receipt.contractAddress) throw new Error("Vault deployment receipt did not contain a contract address.");
-          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Your policy vault was deployed at ${receipt.contractAddress}. You remain its owner. Transaction: ${hash}` }]);
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Your policy vault was deployed at ${receipt.contractAddress}. You remain its owner.`, durationMs: currentTimeMs() - executionStartedAt, transactionHashes: [hash] }]);
           return;
         }
         if (plan.kind === "escrow_create") {
@@ -213,7 +250,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           const receipt = await waitForWalletReceipt(provider, hash);
           if (!receipt.contractAddress) throw new Error("Escrow deployment receipt did not contain a contract address.");
           const termsHash = keccak256(stringToHex(plan.terms));
-          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Funded escrow deployed at ${receipt.contractAddress}. Terms hash: ${termsHash}. Transaction: ${hash}` }]);
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Funded escrow deployed at ${receipt.contractAddress}. Terms hash: ${termsHash}.`, durationMs: currentTimeMs() - executionStartedAt, transactionHashes: [hash] }]);
           return;
         }
         if (plan.kind === "escrow_action") {
@@ -233,7 +270,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           await waitForWalletReceipt(provider, hash);
           const action = plan.action.replaceAll("_", " ");
           const escrowAddress = plan.escrow;
-          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Escrow ${escrowAddress} completed the ${action} action. Transaction: ${hash}` }]);
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Escrow ${escrowAddress} completed the ${action} action.`, durationMs: currentTimeMs() - executionStartedAt, transactionHashes: [hash] }]);
           return;
         }
         if (plan.kind === "session_configure") {
@@ -255,7 +292,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           const sessionHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.vault, data: sessionData, value: "0x0" }] }) as string;
           await waitForWalletReceipt(provider, sessionHash);
           const sessionKey = plan.sessionKey;
-          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${sessionKey} is permitted until ${unixIso(expiry)}, only for the approved recipient and limits. Permission transaction: ${sessionHash}` }]);
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${sessionKey} is permitted until ${unixIso(expiry)}, only for the approved recipient and limits.`, durationMs: currentTimeMs() - executionStartedAt, transactionHashes: [recipientHash, sessionHash] }]);
           return;
         }
         if (plan.kind === "session_revoke") {
@@ -268,7 +305,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           const revokeHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.vault, data: revokeData, value: "0x0" }] }) as string;
           await waitForWalletReceipt(provider, revokeHash);
           const { sessionKey: revokedSession, vault } = plan;
-          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${revokedSession} was revoked on vault ${vault}. Transaction: ${revokeHash}` }]);
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${revokedSession} was revoked on vault ${vault}.`, durationMs: currentTimeMs() - executionStartedAt, transactionHashes: [revokeHash] }]);
           return;
         }
       }
@@ -421,8 +458,8 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
     }
   }
 
-  function updateSwapMessage(messageId: string, quote: SwapQuote) {
-    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: quote.execution ? "Flow verified the completed Uniswap v3 swap and its balance changes." : message.text, swapQuote: quote } : message));
+  function updateSwapMessage(messageId: string, quote: SwapQuote, durationMs?: number, transactionHashes?: string[]) {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: quote.execution ? "Flow verified the completed Uniswap v3 swap and its balance changes." : message.text, swapQuote: quote, durationMs, transactionHashes } : message));
     onTaskCompleted?.();
   }
 
@@ -440,6 +477,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
 
   async function executeSwap(messageId: string, quote: SwapQuote) {
     if (quote.blocked || quote.execution) return;
+    const executionStartedAt = currentTimeMs();
     setWorking(true);
     setError(null);
     try {
@@ -460,7 +498,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
       let lastError: Error | undefined;
       for (let attempt = 0; attempt < 15; attempt += 1) {
         try {
-          updateSwapMessage(messageId, await confirmSwapTransaction({ quote_id: quote.quote_id, approval_transaction_hash: approvalHash, swap_transaction_hash: swapHash }));
+          updateSwapMessage(messageId, await confirmSwapTransaction({ quote_id: quote.quote_id, approval_transaction_hash: approvalHash, swap_transaction_hash: swapHash }), currentTimeMs() - executionStartedAt, [approvalHash, swapHash]);
           return;
         } catch (cause) {
           lastError = cause instanceof Error ? cause : new Error("Swap receipt verification failed.");
@@ -513,7 +551,15 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           <ol className="space-y-7 py-4" aria-live="polite">
             {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
-              <div className="min-w-0"><p>{message.text}</p>{message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
+              <div className="min-w-0">
+                <p>{message.text}</p>
+                {message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}
+                {message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}
+                {message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}
+                <TransactionLinks hashes={message.transactionHashes} />
+                <TaskTiming task={message.task} durationMs={message.durationMs} />
+                {message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}
+              </div>
             </li>)}
           </ol>
         )}

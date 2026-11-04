@@ -20,7 +20,7 @@ DONADS is purpose-built for crypto execution on Monad. Its differentiation is no
 - Commerce requires both verified on-chain payment and a real merchant order receipt before reporting completion.
 - Operator can coordinate specialists, but cannot inherit wallet-signing authority or silently move funds.
 - Task history, evidence, child-agent events, transaction receipts, and PDF reports create an auditable completion record.
-- The policy vault provides revocable session permissions with recipient, per-transaction, daily, expiry, replay, pause, and owner-withdrawal controls on Monad Testnet.
+- The policy vault provides revocable session permissions with recipient, per-transaction, daily, expiry, replay, pause, owner-withdrawal, and exact owner-authorized action controls on Monad Testnet.
 
 The product thesis is focused: use a general agent for broad browser and office work; use DONADS when a Monad task needs constrained authority, explicit wallet consent, deterministic validation, and cryptographic proof of completion. The immediate goal is to make that focused path excellent before expanding into a general cloud-computer platform.
 
@@ -49,7 +49,7 @@ The target platform includes persistent cloud workers, authenticated browsers, c
 | Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
 | Flow | Routes exact native MON and ERC-20 transfers; deploys owner-controlled policy vaults; configures/revokes bounded sessions; creates funded P2P escrows; and implements guarded Uniswap approval, swap, and receipt verification | Official live testnet DEX bytecode, saved contract-action history, replacement/dropped-transaction recovery |
 | Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
-| Sentinel | Performs bytecode triage and enforces Flow network, sender, recipient, asset, and amount policy checks | Deployed-vault state, merchant/domain policy, prompt-injection controls |
+| Sentinel | Runs preflight phishing/scam checks before task execution, triages bytecode, detects dangerous token/NFT approvals, and enforces Flow network, sender, recipient, asset, and amount policy checks | Live reputation feeds, downloaded-file malware scanning, deployed-vault state, broader merchant/domain policy |
 
 Six specialists exist. The planned ten-bot catalog is intentionally incomplete: a new bot will only be specified and built after explicit product-owner approval.
 
@@ -63,7 +63,7 @@ The Uniswap v3 adapter uses the Monad Testnet QuoterV2 and SwapRouter02 addresse
 
 P2P escrow is available through `Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed`. The connected buyer wallet deploys and funds a dedicated contract. Its full lifecycle is chat-native through `Release escrow 0xESCROW`, `Cooperative refund escrow 0xESCROW`, `Timeout refund escrow 0xESCROW`, `Dispute escrow 0xESCROW evidence ...`, and `Resolve escrow 0xESCROW to seller|buyer resolution ...`. The contract enforces the caller's buyer, seller, or arbiter role and emits on-chain receipts for every state transition.
 
-Restricted session permissions are wallet-driven. `Deploy my policy vault` deploys a vault owned by the connected user. A session address held in an external wallet or secure signer can then be bounded with `Allow session 0xSESSION on vault 0xVAULT to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0xRECIPIENT`, or immediately disabled with `Revoke session 0xSESSION on vault 0xVAULT`. DONADS never creates, receives, or stores the session private key.
+Restricted session permissions are wallet-driven. `Deploy my policy vault` deploys a vault owned by the connected user. A session address held in an external wallet or secure signer can then be bounded with `Allow session 0xSESSION on vault 0xVAULT to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0xRECIPIENT`, or immediately disabled with `Revoke session 0xSESSION on vault 0xVAULT`. Delegated native execution additionally requires an owner-authorized action bound to the chain, vault, session, recipient, amount, Mission identifier, nonce, and expiry. DONADS never creates, receives, or stores the session private key.
 
 The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for testing`. Financial values bypass the language model and are parsed deterministically. Flow then exposes the exact intent in the conversation. Its lifecycle is `awaiting approval → authorized → submitted → confirmed`; the submitted transaction hash is checkpointed server-side and temporarily retained in the originating browser so a refresh, slow receipt, or interrupted API call resumes verification instead of broadcasting a duplicate payment.
 
@@ -148,6 +148,18 @@ Every asynchronous workflow uses the DONADS canvas loader from the approved proc
 
 Completed specialist results can be exported as structured PDF reports. Reports are generated locally in the browser, require no PDF service or API key, include task metadata, request fields, structured results, activity evidence, timestamps, and page numbers, and omit fields whose names indicate tokens, signatures, secrets, seed phrases, or private keys.
 
+Every newly accepted task now creates a normalized, versioned Mission with an append-only event timeline, a specialist step and an execution attempt. Flow Missions additionally persist typed transaction intents, approval evidence, wallet submission state, and independently verified receipts. The original task API remains compatible while the Mission API provides the durable audit model at `GET /api/v1/missions`.
+
+The product exposes a wallet-scoped apps/readiness panel. Its connector catalog covers Google Workspace, Slack, GitHub and Telegram and reports exactly which server-side credentials are missing. Live OAuth is intentionally fail-closed until encrypted token storage, callback state/PKCE, webhook authenticity and disconnect tests are complete. The same panel exposes a mainnet evidence checklist; it cannot enable mainnet.
+
+Architecture and release evidence:
+
+- [`docs/architecture/current-state.md`](docs/architecture/current-state.md)
+- [`docs/architecture/decisions.md`](docs/architecture/decisions.md)
+- [`docs/acceptance-matrix.md`](docs/acceptance-matrix.md)
+- [`docs/connected-apps.md`](docs/connected-apps.md)
+- [`docs/mainnet-runbook.md`](docs/mainnet-runbook.md)
+
 ## Credentials and service requirements
 
 The current local/testnet build requires **no paid API key**. It uses the public Monad Testnet RPC, the user's wallet, deterministic specialists, and local browser PDF generation. A free public Reown project ID enables the WalletConnect wallet chooser and QR modal; it is client configuration, not a secret.
@@ -184,6 +196,8 @@ The model gateway is not active until an approved provider key is configured. Wh
 The canonical values live in `frontend/src/lib/ai-policy.ts`. Server-side database leases and wallet-scoped counters enforce concurrency and request quotas; browser checks are usability aids, not the security boundary.
 
 The Gemini gateway is provider-ready and remains disabled while `GEMINI_API_KEY` is empty. `GEMINI_MODEL` defaults to the stable `gemini-2.5-flash` identifier and can be changed without altering specialist code. When configured, Gemini produces schema-constrained routing, cited Scout summaries, Growth draft improvements, and image/PDF understanding. Missing keys, exhausted quota, timeouts, and provider failures fall back to the deterministic specialists. Sentinel, Flow, Commerce policy, transaction validation, and all signing remain outside model authority.
+
+Sentinel screens every signed chat request before model planning or wallet activity. It fails closed on deterministic high-risk signals such as credential-hiding URLs, protected-brand lookalikes, punycode/IP/shortened destinations, executable downloads, seed/private-key social engineering, unlimited ERC-20 approvals, and NFT `setApprovalForAll`. A clean deterministic result is not a guarantee of safety; live reputation, malware scanning, and contract simulation remain separate integrations.
 
 ## Local setup
 

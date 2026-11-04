@@ -32,6 +32,7 @@ describe("task report model", () => {
     const report = buildTaskReport(task);
     expect(report.title).toBe("Sentinel task report");
     expect(report.filename).toBe("donads-sentinel-72c191d7.pdf");
+    expect(report.metadata).toContainEqual(["Worked for", "1s"]);
     expect(report.result).toContainEqual(["Threat score", "60"]);
     expect(report.activity[0][2]).toBe("Scan completed.");
   });

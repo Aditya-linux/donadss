@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
-use k256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use k256::{ecdsa::SigningKey, elliptic_curve::Generate};
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use sha3::{Digest, Keccak256};
@@ -14,8 +14,8 @@ async fn main() -> anyhow::Result<()> {
     let base_url = std::env::var("DONADS_ACCEPTANCE_API_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
-    let signing_key = SigningKey::random(&mut OsRng);
-    let encoded = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let encoded = signing_key.verifying_key().to_sec1_point(false);
     let public_hash = Keccak256::digest(&encoded.as_bytes()[1..]);
     let address = format!("0x{}", hex::encode(&public_hash[12..]));
 
@@ -35,9 +35,7 @@ async fn main() -> anyhow::Result<()> {
         .chain_update(prefix.as_bytes())
         .chain_update(message.as_bytes())
         .finalize();
-    let (signature, recovery_id) = signing_key
-        .sign_prehash_recoverable(digest.as_ref())
-        .context("could not sign login challenge")?;
+    let (signature, recovery_id) = signing_key.sign_prehash_recoverable(digest.as_ref());
     let mut signature_bytes = signature.to_bytes().to_vec();
     signature_bytes.push(recovery_id.to_byte() + 27);
 

@@ -364,7 +364,7 @@ fn recover_address(message: &str, raw_signature: &str) -> Result<String, AuthErr
     }
     let signature = Signature::from_slice(&bytes[..64])
         .map_err(|_| AuthError::unauthorized("wallet signature is invalid"))?;
-    if signature.normalize_s().is_some() {
+    if signature != signature.normalize_s() {
         return Err(AuthError::unauthorized("wallet signature is non-canonical"));
     }
     let recovery_byte = match bytes[64] {
@@ -381,7 +381,7 @@ fn recover_address(message: &str, raw_signature: &str) -> Result<String, AuthErr
         .finalize();
     let key = VerifyingKey::recover_from_prehash(hash.as_ref(), &signature, recovery_id)
         .map_err(|_| AuthError::unauthorized("wallet signature could not be recovered"))?;
-    let encoded = key.to_encoded_point(false);
+    let encoded = key.to_sec1_point(false);
     let digest = Keccak256::digest(&encoded.as_bytes()[1..]);
     Ok(format!("0x{}", hex::encode(&digest[12..])))
 }
@@ -419,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn valid_personal_signature_creates_a_single_wallet_session() {
         let signing_key = SigningKey::from_bytes((&[7_u8; 32]).into()).expect("test key");
-        let encoded = signing_key.verifying_key().to_encoded_point(false);
+        let encoded = signing_key.verifying_key().to_sec1_point(false);
         let public_hash = Keccak256::digest(&encoded.as_bytes()[1..]);
         let address = format!("0x{}", hex::encode(&public_hash[12..]));
         let auth = AuthService::new(
@@ -435,9 +435,7 @@ mod tests {
             .chain_update(prefix.as_bytes())
             .chain_update(challenge.message.as_bytes())
             .finalize();
-        let (signature, recovery_id) = signing_key
-            .sign_prehash_recoverable(hash.as_ref())
-            .expect("sign challenge");
+        let (signature, recovery_id) = signing_key.sign_prehash_recoverable(hash.as_ref());
         let mut bytes = signature.to_bytes().to_vec();
         bytes.push(recovery_id.to_byte() + 27);
         let session = auth

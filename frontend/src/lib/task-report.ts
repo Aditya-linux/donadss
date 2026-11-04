@@ -1,4 +1,5 @@
 import type { CompletedTask } from "@/lib/donads-api";
+import { formatTaskDuration, taskCompletionTime } from "@/lib/task-receipt";
 
 export type ReportRow = [label: string, value: string];
 
@@ -80,7 +81,8 @@ export function buildTaskReport(task: CompletedTask): TaskReportModel {
       ["Task status", task.status.state],
       ["Created (UTC)", formatTime(task.created_at_ms)],
       ["Updated (UTC)", formatTime(task.updated_at_ms)],
-      ["Processing time", `${task.status.latency_ms} ms`],
+      ["Worked for", formatTaskDuration(taskCompletionTime(task) - task.created_at_ms)],
+      ["Specialist processing time", `${task.status.latency_ms} ms`],
       ["Summary", task.status.summary],
     ],
     request: [["Prompt", task.prompt], ...flattenReportData(task.input)],

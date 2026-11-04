@@ -10,6 +10,8 @@ export type WalletProvider = {
 type WalletConnectProvider = WalletProvider & {
   connect(): Promise<void>;
   session?: unknown;
+  on?: (event: string, callback: (value: unknown) => void) => void;
+  off?: (event: string, callback: (value: unknown) => void) => void;
   modal?: {
     close?: () => Promise<void> | void;
     subscribeState?: (callback: (state: { open?: boolean }) => void) => (() => void) | void;
@@ -25,6 +27,7 @@ declare global {
 let activeProvider: WalletProvider | null = null;
 
 const WALLET_CONNECT_TIMEOUT_MS = 120_000;
+const WALLET_CONNECT_QR_TIMEOUT_MS = 15_000;
 
 export class WalletConnectionCancelledError extends Error {
   constructor(message = "Wallet connection cancelled.") {
@@ -48,6 +51,10 @@ export async function connectWalletConnectProvider(provider: WalletConnectProvid
   let modalWasOpened = false;
   let unsubscribe: (() => void) | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let qrTimeout: ReturnType<typeof setTimeout> | undefined;
+  let pairingUriReady = false;
+  const onDisplayUri = () => { pairingUriReady = true; };
+  provider.on?.("display_uri", onDisplayUri);
 
   const cancelled = new Promise<never>((_, reject) => {
     const subscription = provider.modal?.subscribeState?.((state) => {
@@ -65,8 +72,17 @@ export async function connectWalletConnectProvider(provider: WalletConnectProvid
     );
   });
 
+  const qrUnavailable = new Promise<never>((_, reject) => {
+    if (!provider.on) return;
+    qrTimeout = setTimeout(() => {
+      if (!provider.session && !pairingUriReady) {
+        reject(new Error("WalletConnect could not generate a QR code. Check your connection and choose a wallet again."));
+      }
+    }, WALLET_CONNECT_QR_TIMEOUT_MS);
+  });
+
   try {
-    await Promise.race([provider.connect(), cancelled]);
+    await Promise.race([provider.connect(), cancelled, qrUnavailable]);
   } catch (error) {
     // AppKit teardown can outlive the cancelled connection. Start cleanup, but
     // never keep the DONADS loading screen blocked on a third-party modal.
@@ -79,7 +95,9 @@ export async function connectWalletConnectProvider(provider: WalletConnectProvid
     throw error;
   } finally {
     unsubscribe?.();
+    provider.off?.("display_uri", onDisplayUri);
     if (timeout) clearTimeout(timeout);
+    if (qrTimeout) clearTimeout(qrTimeout);
   }
 }
 

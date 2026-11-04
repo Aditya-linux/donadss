@@ -21,6 +21,7 @@ export const metadata: Metadata = {
     icon: "/brand/donads-mascot-tile.png",
     apple: "/brand/donads-mascot-tile.png",
   },
+  manifest: "/manifest.webmanifest",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

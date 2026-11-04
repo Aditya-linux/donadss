@@ -47,7 +47,7 @@ The target platform includes persistent cloud workers, authenticated browsers, c
 | Scout | Fetches up to five user-supplied public URLs, blocks private-network targets, extracts evidence, and returns citations | Search provider, authenticated browser, broader live discovery |
 | Commerce | Validates source-linked crypto offers and enforces offer → exact approval → invoice → confirmed payment → verified order-receipt state transitions | First authorized physical-product merchant adapter, authenticated checkout, shipping/refund recovery |
 | Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
-| Flow | Routes an exact `send X MON to 0x…` request from unified chat, requests the user's browser wallet, checkpoints the submitted hash, and verifies the mined receipt server-side | Deployed policy vault, ERC-20 and DEX swap support, replacement/dropped-transaction recovery |
+| Flow | Routes exact native MON and ERC-20 transfers from unified chat, validates token metadata and balances, requests the user's wallet, checkpoints the submitted hash, and verifies mined calldata, receipts, and balance deltas server-side | Deployed policy vault, DEX swap execution, replacement/dropped-transaction recovery |
 | Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
 | Sentinel | Performs bytecode triage and enforces Flow network, sender, recipient, asset, and amount policy checks | Deployed-vault state, merchant/domain policy, prompt-injection controls |
 
@@ -57,6 +57,10 @@ Six specialists exist. The planned ten-bot catalog is intentionally incomplete: 
 
 A Monad transfer is complete only when the configured RPC proves it is on the expected chain, the user approves the exact intent in their wallet, and DONADS verifies the successful mined receipt, sender, recipient, amount, block, and absence of calldata.
 
+ERC-20 chat commands use the explicit form `Send 10 USDC token 0xTOKEN_CONTRACT to 0xRECIPIENT`. Flow reads the contract code, symbol, decimals, and balances from Monad Testnet; rejects symbol, precision, or balance mismatches; builds the standard `transfer(address,uint256)` calldata; and requires the mined transaction plus exact recipient balance delta to match before completion. The balance control shows live MON plus every verified token contract present in that wallet's DONADS history.
+
+Swap simulations are coded against the allowlisted Uniswap v3 Monad Testnet QuoterV2 and SwapRouter02 addresses from Uniswap's official deployment feed. The explicit chat form is `Swap 1 USDC token 0xINPUT for DAI token 0xOUTPUT max 0.5% slippage`. DONADS first requires both official addresses to contain bytecode, then checks both token contracts, tests supported fee tiers, calculates integer minimum output, estimates price impact against a smaller same-pool quote, and explains policy blocks. On 2026-11-02 the official Monad Testnet RPC returned no bytecode for every Uniswap v2, v3, and Universal Router address currently marked active in the official feed, so the adapter correctly remains disabled rather than fabricating a quote. Approval, swap submission, and post-swap receipt/balance verification cannot be enabled until an approved router is live.
+
 The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for testing`. Financial values bypass the language model and are parsed deterministically. Flow then exposes the exact intent in the conversation. Its lifecycle is `awaiting approval → authorized → submitted → confirmed`; the submitted transaction hash is checkpointed server-side and temporarily retained in the originating browser so a refresh, slow receipt, or interrupted API call resumes verification instead of broadcasting a duplicate payment.
 
 A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
@@ -65,7 +69,9 @@ A commerce task is complete only when an authorized merchant integration returns
 
 After signing in with the same wallet on a phone, DONADS restores that wallet's task history and shows an **Action needed** inbox. The inbox is derived from persisted workflow state, so phone and desktop cannot disagree about whether a task is actually paused. It currently covers Flow intent review, wallet signing, receipt verification, Commerce intent review, and planned Operator runs.
 
-The inbox refreshes while the app is visible and marks an existing checkpoint as waiting after two minutes. Time alone never creates an approval and never grants authority. Opening a financial checkpoint reveals the exact task; the connected mobile wallet must still display and sign the final transaction. Native lock-screen Web Push is a remaining enhancement and will be opt-in, privacy-minimized, and revocable.
+The inbox refreshes while the app is visible and marks an existing checkpoint as waiting after two minutes. Time alone never creates an approval and never grants authority. Opening a financial checkpoint reveals the exact task; the connected mobile wallet must still display and sign the final transaction.
+
+Opt-in Web Push is implemented for browsers that support service workers and Push API. It stores wallet-owned subscriptions, removes expired endpoints, and sends privacy-minimized checkpoint alerts that never expose amounts or addresses on the lock screen. It remains visibly disabled until `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` are configured in Vercel. On iOS, the user must install DONADS to the Home Screen before Web Push is available.
 
 ## Frozen testnet delivery sequence
 

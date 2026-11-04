@@ -20,17 +20,22 @@ import {
   getAiUsageSince,
   getRoutine,
   getTask,
+  deletePushSubscription,
   listRoutines,
   listTasks,
   putProfile,
   putRoutine,
+  putPushSubscription,
   updateTask,
 } from "@/server/database";
 import { geminiConfigured } from "@/server/gemini";
 import { planTask } from "@/server/ai-planner";
 import { taskEvent } from "@/server/donads-types";
+import { encodeErc20Transfer, formatTokenAmount, monadRpc, readErc20Balance } from "@/server/monad";
 import { createAndExecuteTask } from "@/server/tasks";
 import { operatorWorkflow } from "@/workflows/operator";
+import { quoteUniswapSwap } from "@/server/uniswap";
+import { publicVapidKey, sendCheckpointNotification } from "@/server/push";
 
 export const maxDuration = 300;
 
@@ -113,16 +118,8 @@ async function flowAction(ownerId: string, id: string, request: Request): Promis
   task.updated_at_ms = Date.now();
   task.events.push(taskEvent(task.events, String(action.action), task.status.summary));
   await updateTask(task);
+  await sendCheckpointNotification(task).catch((error) => console.error("DONADS push notification failed", error));
   return json({ task, duplicate_prevented: duplicatePrevented });
-}
-
-async function rpc(method: string, params: unknown[]): Promise<unknown> {
-  const endpoint = process.env.MONAD_RPC_URL ?? "https://testnet-rpc.monad.xyz";
-  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(12_000) });
-  if (!response.ok) throw new Error(`Monad RPC returned HTTP ${response.status}.`);
-  const payload = await response.json() as { result?: unknown; error?: { message?: string } };
-  if (payload.error) throw new Error(payload.error.message ?? "Monad RPC rejected the request.");
-  return payload.result;
 }
 
 async function recordFlowSubmission(ownerId: string, id: string, request: Request): Promise<Response> {
@@ -153,14 +150,29 @@ async function confirmFlow(ownerId: string, id: string, request: Request): Promi
   const workflow = task.status.data.workflow;
   if (workflow.state === "confirmed" && workflow.execution?.transaction_hash === hash) return json(task);
   if (workflow.state !== "submitted" || workflow.submission?.transaction_hash !== hash) throw new Error("Transaction hash does not match the recorded wallet submission.");
-  const transaction = await rpc("eth_getTransactionByHash", [hash]) as Record<string, string> | null;
-  const receipt = await rpc("eth_getTransactionReceipt", [hash]) as Record<string, string> | null;
+  const transaction = await monadRpc("eth_getTransactionByHash", [hash]) as Record<string, string> | null;
+  const receipt = await monadRpc("eth_getTransactionReceipt", [hash]) as Record<string, string> | null;
   if (!transaction || !receipt?.blockNumber) throw new Error("Transaction has not been mined yet.");
   if (receipt.status !== "0x1") throw new Error("Monad receipt reports a reverted transaction.");
   const payout = workflow.payouts[0];
-  if (transaction.from?.toLowerCase() !== workflow.payer || transaction.to?.toLowerCase() !== payout.recipient_address || BigInt(transaction.value) !== monToWei(payout.amount) || !["0x", "0x0", undefined].includes(transaction.input)) throw new Error("Mined transaction does not match the approved sender, recipient, amount, or calldata policy.");
+  if (transaction.from?.toLowerCase() !== workflow.payer) throw new Error("Mined transaction sender does not match the approved payer.");
+  let senderBalanceAfter: bigint | null = null;
+  let recipientBalanceAfter: bigint | null = null;
+  if (workflow.transfer_kind === "erc20" && workflow.token && payout.amount_atomic) {
+    const expectedInput = encodeErc20Transfer(payout.recipient_address, BigInt(payout.amount_atomic)).toLowerCase();
+    if (transaction.to?.toLowerCase() !== workflow.token.contract || BigInt(transaction.value ?? "0x0") !== BigInt(0) || transaction.input?.toLowerCase() !== expectedInput) throw new Error("Mined ERC-20 transaction does not match the approved contract, recipient, amount, or calldata policy.");
+    [senderBalanceAfter, recipientBalanceAfter] = await Promise.all([
+      readErc20Balance(workflow.token.contract, workflow.payer),
+      readErc20Balance(workflow.token.contract, payout.recipient_address),
+    ]);
+    const amountAtomic = BigInt(payout.amount_atomic);
+    if (recipientBalanceAfter - BigInt(workflow.token.recipient_balance_before_atomic) !== amountAtomic) throw new Error("Recipient token balance delta does not match the approved amount.");
+    if (BigInt(workflow.token.sender_balance_before_atomic) - senderBalanceAfter < amountAtomic) throw new Error("Sender token balance did not decrease by the approved amount.");
+  } else if (transaction.to?.toLowerCase() !== payout.recipient_address || BigInt(transaction.value) !== monToWei(payout.amount) || !["0x", "0x0", undefined].includes(transaction.input)) {
+    throw new Error("Mined native transaction does not match the approved recipient, amount, or calldata policy.");
+  }
   workflow.state = "confirmed";
-  workflow.execution = { transaction_hash: hash.toLowerCase(), block_number: Number(BigInt(receipt.blockNumber)), confirmed_at_ms: Date.now() };
+  workflow.execution = { transaction_hash: hash.toLowerCase(), block_number: Number(BigInt(receipt.blockNumber)), confirmed_at_ms: Date.now(), ...(senderBalanceAfter === null ? {} : { sender_balance_after_atomic: senderBalanceAfter.toString(), recipient_balance_after_atomic: recipientBalanceAfter!.toString() }) };
   workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_confirmed", detail: `Monad receipt verified in block ${workflow.execution.block_number}.`, at_ms: Date.now() });
   task.status.summary = "Flow verified the successful Monad Testnet transaction and exact approved values.";
   task.updated_at_ms = Date.now();
@@ -216,10 +228,36 @@ async function route(request: Request, context: Context): Promise<Response> {
 
   const { ownerId } = await authenticate(request);
   if (method === "GET" && segments.join("/") === "auth/session") return json({ owner_id: ownerId });
+  if (method === "GET" && segments.join("/") === "push/config") return json({ configured: Boolean(publicVapidKey()), public_key: publicVapidKey() });
+  if (method === "POST" && segments.join("/") === "push/subscriptions") {
+    const payload = await body(request); const endpoint = String(payload.endpoint ?? "");
+    const keys = payload.keys && typeof payload.keys === "object" ? payload.keys as Record<string, unknown> : {};
+    const p256dh = String(keys.p256dh ?? ""); const auth = String(keys.auth ?? "");
+    if (!endpoint.startsWith("https://") || endpoint.length > 2_048) throw new Error("Push subscription endpoint is invalid.");
+    if (!p256dh || !auth || p256dh.length > 512 || auth.length > 256) throw new Error("Push subscription keys are invalid.");
+    await putPushSubscription(ownerId, { endpoint, keys: { p256dh, auth } }); return json({ subscribed: true }, 201);
+  }
+  if (method === "DELETE" && segments.join("/") === "push/subscriptions") {
+    const payload = await body(request); await deletePushSubscription(ownerId, String(payload.endpoint ?? "")); return new Response(null, { status: 204 });
+  }
   if (method === "GET" && segments.join("/") === "approvals") return json(pendingApprovals(await listTasks(ownerId, 100)));
   if (method === "GET" && segments.join("/") === "wallet/balance") {
-    const value = String(await rpc("eth_getBalance", [ownerId, "latest"]));
+    const value = String(await monadRpc("eth_getBalance", [ownerId, "latest"]));
     return json({ address: ownerId, chain_id: 10143, network: "Monad Testnet", symbol: "MON", balance_atomic: BigInt(value).toString(), balance_mon: formatEther(BigInt(value)) });
+  }
+  if (method === "GET" && segments.join("/") === "wallet/token-balances") {
+    const tasks = await listTasks(ownerId, 100);
+    const tokens = new Map<string, { contract: string; symbol: string; decimals: number }>();
+    for (const task of tasks) {
+      if (task.status.state !== "completed" || task.bot !== "flow") continue;
+      const token = task.status.data.workflow.token;
+      if (token) tokens.set(token.contract, { contract: token.contract, symbol: token.symbol, decimals: token.decimals });
+    }
+    const balances = await Promise.all([...tokens.values()].slice(0, 10).map(async (token) => {
+      const value = await readErc20Balance(token.contract, ownerId);
+      return { ...token, balance_atomic: value.toString(), balance_formatted: formatTokenAmount(value, token.decimals) };
+    }));
+    return json(balances);
   }
   if (method === "GET" && segments.join("/") === "ai/usage") {
     const now = new Date();
@@ -244,6 +282,14 @@ async function route(request: Request, context: Context): Promise<Response> {
     }) : [];
     if (attachments.length > DONADS_AI_POLICY.maxAttachmentsPerTask) throw new Error("A task accepts up to 5 attachments.");
     return json(await planTask(ownerId, prompt, attachments));
+  }
+  if (method === "POST" && segments.join("/") === "dex/quote") {
+    const payload = await body(request);
+    return json(await quoteUniswapSwap({
+      tokenIn: String(payload.token_in ?? ""), tokenOut: String(payload.token_out ?? ""),
+      amount: String(payload.amount ?? ""), recipient: ownerId,
+      slippageBps: Number(payload.slippage_bps), maxPriceImpactBps: Number(payload.max_price_impact_bps),
+    }));
   }
   if (segments[0] === "tasks" && segments.length === 1 && method === "POST") return json(await createAndExecuteTask(ownerId, await body(request)), 201);
   if (segments[0] === "tasks" && segments.length === 1 && method === "GET") return json(await listTasks(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
@@ -293,3 +339,4 @@ async function handle(request: Request, context: Context): Promise<Response> {
 export const GET = handle;
 export const POST = handle;
 export const PUT = handle;
+export const DELETE = handle;

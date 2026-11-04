@@ -38,6 +38,32 @@ const balance = await request("/api/v1/wallet/balance", {}, token);
 assert(balance.response.ok && balance.payload.chain_id === 10143 && balance.payload.symbol === "MON", "Monad Testnet balance endpoint failed.");
 const aiUsage = await request("/api/v1/ai/usage", {}, token);
 assert(aiUsage.response.ok && aiUsage.payload.remaining_today >= 0 && aiUsage.payload.remaining_today <= 30, "AI usage endpoint failed.");
+const tokenBalances = await request("/api/v1/wallet/token-balances", {}, token);
+assert(tokenBalances.response.ok && Array.isArray(tokenBalances.payload), "ERC-20 balance endpoint failed.");
+const pushConfig = await request("/api/v1/push/config", {}, token);
+assert(pushConfig.response.ok && typeof pushConfig.payload.configured === "boolean", "Web Push configuration endpoint failed.");
+
+const unfundedTokenTransfer = await request("/api/v1/tasks", {
+  method: "POST",
+  body: JSON.stringify({
+    prompt: "Validate an unfunded ERC-20 transfer",
+    bot: "flow",
+    input: {
+      title: "ERC-20 acceptance failure",
+      purpose: "Verify live token metadata and insufficient-balance blocking",
+      payer: account.address,
+      payouts: [{ recipient_name: "Acceptance recipient", recipient_address: "0x2222222222222222222222222222222222222222", asset: "USDC", amount: "1", token_contract: "0x534b2f3A21130d7a60830c2Df862319e593943A3", milestone: "Acceptance", deadline: null }],
+      approval_conditions: ["Exact token contract and amount reviewed"], linked_task_id: null,
+    },
+  }),
+}, token);
+assert(unfundedTokenTransfer.response.status === 201 && unfundedTokenTransfer.payload.status.state === "failed" && /insufficient USDC balance/i.test(unfundedTokenTransfer.payload.status.error), "Live ERC-20 insufficient-balance policy did not fail closed.");
+
+const dexQuote = await request("/api/v1/dex/quote", {
+  method: "POST",
+  body: JSON.stringify({ token_in: "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541", token_out: "0x534b2f3A21130d7a60830c2Df862319e593943A3", amount: "0.001", slippage_bps: 50, max_price_impact_bps: 200 }),
+}, token);
+assert(dexQuote.response.ok || /official Monad Testnet addresses have no bytecode/i.test(dexQuote.payload.error), `DEX adapter returned an unexpected result: ${JSON.stringify(dexQuote.payload)}`);
 
 const created = await request("/api/v1/tasks", {
   method: "POST",
@@ -169,6 +195,10 @@ console.log(JSON.stringify({
   revoked_session_status: revoked.response.status,
   restored_session: true,
   balance_network: balance.payload.network,
+  tracked_token_balances: tokenBalances.payload.length,
+  erc20_unfunded_policy: unfundedTokenTransfer.payload.status.state,
+  dex_adapter_state: dexQuote.response.ok ? "quoted" : "disabled_no_official_bytecode",
+  push_configured: pushConfig.payload.configured,
   ai_remaining_today: aiUsage.payload.remaining_today,
   ai_configured: aiUsage.payload.configured,
   flow_submission_checkpoint: flowSubmitted.payload.status.data.workflow.state,

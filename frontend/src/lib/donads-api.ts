@@ -72,6 +72,9 @@ export type FlowPayout = {
   amount: string;
   milestone: string;
   deadline: string | null;
+  token_contract?: string | null;
+  token_decimals?: number | null;
+  amount_atomic?: string | null;
 };
 
 export type PaymentWorkflow = {
@@ -81,6 +84,14 @@ export type PaymentWorkflow = {
   payer: string;
   network: "Monad Testnet";
   chain_id: 10143;
+  transfer_kind?: "native" | "erc20";
+  token?: {
+    contract: string;
+    symbol: string;
+    decimals: number;
+    sender_balance_before_atomic: string;
+    recipient_balance_before_atomic: string;
+  } | null;
   state:
     | "awaiting_approval"
     | "authorized"
@@ -100,6 +111,8 @@ export type PaymentWorkflow = {
     transaction_hash: string;
     block_number: number;
     confirmed_at_ms: number;
+    sender_balance_after_atomic?: string;
+    recipient_balance_after_atomic?: string;
   } | null;
   audit_history: Array<{
     sequence: number;
@@ -367,6 +380,26 @@ export async function restoreWalletSession(): Promise<{ owner_id: string }> {
 }
 
 export type WalletBalance = { address: string; chain_id: 10143; network: "Monad Testnet"; symbol: "MON"; balance_atomic: string; balance_mon: string };
+
+export type TokenBalance = {
+  contract: string;
+  symbol: string;
+  decimals: number;
+  balance_atomic: string;
+  balance_formatted: string;
+};
+
+export async function getWalletTokenBalances(): Promise<TokenBalance[]> {
+  const response = await apiFetch(`${API_URL}/v1/wallet/token-balances`);
+  return readJson(response);
+}
+
+export type SwapQuote = import("@/server/uniswap").UniswapQuote;
+
+export async function getSwapQuote(input: { token_in: string; token_out: string; amount: string; slippage_bps: number; max_price_impact_bps: number }, signal?: AbortSignal): Promise<SwapQuote> {
+  const response = await apiFetch(`${API_URL}/v1/dex/quote`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+  return readJson(response);
+}
 
 export async function getWalletBalance(): Promise<WalletBalance> {
   const response = await apiFetch(`${API_URL}/v1/wallet/balance`);
@@ -804,6 +837,21 @@ export async function listPendingApprovals(
 ): Promise<import("@/lib/approvals").PendingApproval[]> {
   const response = await apiFetch(`${API_URL}/v1/approvals`, { signal });
   return readJson<import("@/lib/approvals").PendingApproval[]>(response);
+}
+
+export async function getPushConfig(): Promise<{ configured: boolean; public_key: string | null }> {
+  const response = await apiFetch(`${API_URL}/v1/push/config`);
+  return readJson(response);
+}
+
+export async function savePushSubscription(subscription: PushSubscriptionJSON): Promise<void> {
+  const response = await apiFetch(`${API_URL}/v1/push/subscriptions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subscription) });
+  await readJson(response);
+}
+
+export async function removePushSubscription(endpoint: string): Promise<void> {
+  const response = await apiFetch(`${API_URL}/v1/push/subscriptions`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint }) });
+  if (!response.ok) await readJson(response);
 }
 
 export async function submitTaskFeedback(

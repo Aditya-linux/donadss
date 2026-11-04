@@ -1,12 +1,13 @@
 "use client";
 
-import { Bell, CircleDollarSign, Clock3, Gauge, Layers3, Menu, Megaphone, MessageSquarePlus, Radar, ShieldCheck, ShoppingBag, WalletCards, Workflow, X } from "lucide-react";
+import { Bell, CircleDollarSign, Clock3, Coins, Gauge, Layers3, Menu, Megaphone, MessageSquarePlus, Radar, ShieldCheck, ShoppingBag, WalletCards, Workflow, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MascotLoader, MascotMark, SpecialistMark } from "@/components/mascot";
 import { UnifiedTaskWorkspace } from "@/components/unified-task-workspace";
-import { createAuthChallenge, getAiUsage, getTask, getWalletBalance, listPendingApprovals, listTaskHistory, restoreWalletSession, revokeWalletSession, setAccessToken, type AiUsage, type Task, type WalletBalance, verifyWalletSignature } from "@/lib/donads-api";
+import { createAuthChallenge, getAiUsage, getPushConfig, getTask, getWalletBalance, getWalletTokenBalances, listPendingApprovals, listTaskHistory, restoreWalletSession, revokeWalletSession, setAccessToken, type AiUsage, type Task, type TokenBalance, type WalletBalance, verifyWalletSignature } from "@/lib/donads-api";
 import type { PendingApproval } from "@/lib/approvals";
 import { connectWalletProvider, disconnectWalletProvider } from "@/lib/wallet-provider";
+import { currentPushSubscription, disablePushNotifications, enablePushNotifications, pushSupported } from "@/lib/push-client";
 
 const specialists = [
   { id: "scout", name: "Scout", specialty: "Cited research", summary: "Turns supplied public sources into concise findings with traceable citations.", goodAt: ["Source comparison", "Evidence extraction", "Research briefs"], prompts: ["Compare these three protocol docs", "Summarize this proposal with citations", "Find conflicts across these sources"], icon: Radar },
@@ -49,7 +50,29 @@ function ApprovalDialog({ approvals, onClose, onReview }: { approvals: PendingAp
   }, []);
   return <dialog ref={ref} onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-hidden rounded-2xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-foreground/30 backdrop:backdrop-blur-sm">
     <div className="flex items-start gap-3 border-b border-border p-5"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted"><Bell className="size-5" aria-hidden="true" /></span><div className="min-w-0 flex-1"><h2 className="text-lg font-semibold tracking-tight">Action needed</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">These checkpoints are synced to this wallet across phone and desktop.</p></div><button type="button" aria-label="Close action inbox" onClick={onClose} className="grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"><X className="size-4" aria-hidden="true" /></button></div>
-    <div className="max-h-[65dvh] overflow-y-auto p-3">{approvals.length ? <ul className="space-y-2">{approvals.map((approval) => <li key={`${approval.task_id}-${approval.kind}`} className="rounded-xl border border-border p-4"><div className="flex items-start gap-3"><span className={`mt-1 size-2 shrink-0 rounded-full ${approval.reminder_due ? "bg-destructive" : "bg-primary"}`} aria-hidden="true" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">{approval.title}</h3>{approval.reminder_due ? <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-1 text-[10px] font-medium text-destructive"><Clock3 className="size-3" aria-hidden="true" />Waiting</span> : null}</div><p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{approval.summary}</p><p className="mt-2 text-[11px] capitalize text-muted-foreground">{approval.bot} · {approval.state.replaceAll("_", " ")}</p></div></div><button type="button" onClick={() => onReview(approval)} className="mt-3 min-h-10 w-full rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px">Review checkpoint</button></li>)}</ul> : <div className="px-4 py-10 text-center"><p className="text-sm font-medium">Nothing needs you right now</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Long-running work continues without creating unnecessary approvals.</p></div>}</div>
+    <div className="max-h-[58dvh] overflow-y-auto p-3">{approvals.length ? <ul className="space-y-2">{approvals.map((approval) => <li key={`${approval.task_id}-${approval.kind}`} className="rounded-xl border border-border p-4"><div className="flex items-start gap-3"><span className={`mt-1 size-2 shrink-0 rounded-full ${approval.reminder_due ? "bg-destructive" : "bg-primary"}`} aria-hidden="true" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">{approval.title}</h3>{approval.reminder_due ? <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-1 text-[10px] font-medium text-destructive"><Clock3 className="size-3" aria-hidden="true" />Waiting</span> : null}</div><p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{approval.summary}</p><p className="mt-2 text-[11px] capitalize text-muted-foreground">{approval.bot} · {approval.state.replaceAll("_", " ")}</p></div></div><button type="button" onClick={() => onReview(approval)} className="mt-3 min-h-10 w-full rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px">Review checkpoint</button></li>)}</ul> : <div className="px-4 py-10 text-center"><p className="text-sm font-medium">Nothing needs you right now</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Long-running work continues without creating unnecessary approvals.</p></div>}</div>
+    <PushControl />
+  </dialog>;
+}
+
+function PushControl() {
+  const supported = pushSupported();
+  const [ready, setReady] = useState(!supported);
+  const [configured, setConfigured] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { let active = true; if (!supported) return; void Promise.all([getPushConfig(), currentPushSubscription()]).then(([config, subscription]) => { if (!active) return; setConfigured(config.configured); setEnabled(Boolean(subscription)); setReady(true); }).catch((reason) => { if (active) { setError(reason instanceof Error ? reason.message : "Phone alert status failed."); setReady(true); } }); return () => { active = false; }; }, [supported]);
+  async function toggle() { setWorking(true); setError(null); try { if (enabled) await disablePushNotifications(); else await enablePushNotifications(); setEnabled(!enabled); } catch (reason) { setError(reason instanceof Error ? reason.message : "Phone alerts could not be updated."); } finally { setWorking(false); } }
+  return <div className="border-t border-border p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold">Phone lock-screen alerts</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Only says a checkpoint is waiting; transaction details stay inside DONADS.</p></div><button type="button" disabled={!ready || working || !configured || !supported} aria-busy={working} onClick={() => void toggle()} className="min-h-10 shrink-0 rounded-lg border border-border px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Updating…" : enabled ? "Disable" : configured ? "Enable" : "Keys pending"}</button></div>{error ? <p role="alert" className="mt-2 text-xs text-destructive">{error}</p> : null}</div>;
+}
+
+function BalanceDialog({ native, tokens, onClose }: { native: WalletBalance; tokens: TokenBalance[]; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { const dialog = ref.current; if (!dialog) return; if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", ""); }, []);
+  return <dialog ref={ref} onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-foreground/30 backdrop:backdrop-blur-sm">
+    <div className="flex items-start gap-3 border-b border-border p-5"><span className="grid size-10 place-items-center rounded-xl bg-muted"><Coins className="size-5" aria-hidden="true" /></span><div className="min-w-0 flex-1"><h2 className="text-lg font-semibold">Testnet balances</h2><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{native.address}</p></div><button type="button" aria-label="Close balances" onClick={onClose} className="grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><X className="size-4" aria-hidden="true" /></button></div>
+    <div className="space-y-2 p-4"><div className="flex items-baseline justify-between rounded-xl bg-muted p-4"><span className="text-sm font-medium">MON</span><span className="font-mono text-sm tabular-nums">{Number(native.balance_mon).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span></div>{tokens.map((token) => <div key={token.contract} className="rounded-xl border border-border p-4"><div className="flex items-baseline justify-between gap-3"><span className="text-sm font-medium">{token.symbol}</span><span className="font-mono text-sm tabular-nums">{token.balance_formatted}</span></div><p className="mt-2 break-all font-mono text-[11px] text-muted-foreground">{token.contract}</p></div>)}{!tokens.length ? <p className="px-2 py-6 text-center text-xs leading-5 text-muted-foreground">No ERC-20 contracts in this wallet’s DONADS history yet. Prepare a token transfer to add its verified balance.</p> : null}<p className="px-1 pt-2 text-[11px] text-muted-foreground">Monad Testnet · live RPC values</p></div>
   </dialog>;
 }
 
@@ -82,8 +105,10 @@ export function ChatShell() {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [tokenBalances, setTokenBalances] = useState<TokenBalance[]>([]);
+  const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
 
-  async function loadWalletData() { const [tasks, walletBalance, usage, pending] = await Promise.all([listTaskHistory(30), getWalletBalance(), getAiUsage(), listPendingApprovals()]); setHistory(tasks); setBalance(walletBalance); setAiUsage(usage); setApprovals(pending); setHistoryReady(true); }
+  async function loadWalletData() { const [tasks, walletBalance, tokenValues, usage, pending] = await Promise.all([listTaskHistory(30), getWalletBalance(), getWalletTokenBalances(), getAiUsage(), listPendingApprovals()]); setHistory(tasks); setBalance(walletBalance); setTokenBalances(tokenValues); setAiUsage(usage); setApprovals(pending); setHistoryReady(true); }
 
   useEffect(() => { let active = true; void restoreWalletSession().then(async (session) => { if (!active) return; setSignedInWallet(session.owner_id); await loadWalletData(); }).catch(() => { if (active) setHistoryReady(true); }); return () => { active = false; }; }, []);
 
@@ -99,11 +124,11 @@ export function ChatShell() {
   async function signIn() {
     setSigningIn(true); setAuthError(null);
     try { const provider = await connectWalletProvider(); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
-    catch (error) { setAccessToken(null); setSignedInWallet(null); setBalance(null); setAiUsage(null); setHistory([]); setHistoryReady(true); setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed."); }
+    catch (error) { await disconnectWalletProvider().catch(() => undefined); setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setHistoryReady(true); setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed."); }
     finally { setSigningIn(false); }
   }
 
-  async function signOut() { setSigningIn(true); setAuthError(null); try { await revokeWalletSession(); await disconnectWalletProvider(); } catch (error) { setAuthError(error instanceof Error ? error.message : "Server logout failed; the local session was cleared."); } finally { setAccessToken(null); setSignedInWallet(null); setBalance(null); setAiUsage(null); setHistory([]); setApprovals([]); setApprovalInboxOpen(false); setHistoryReady(true); setSigningIn(false); } }
+  async function signOut() { setSigningIn(true); setAuthError(null); try { await revokeWalletSession(); await disconnectWalletProvider(); } catch (error) { setAuthError(error instanceof Error ? error.message : "Server logout failed; the local session was cleared."); } finally { setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setApprovals([]); setApprovalInboxOpen(false); setBalanceDialogOpen(false); setHistoryReady(true); setSigningIn(false); } }
 
   async function reviewApproval(approval: PendingApproval) {
     setApprovalError(null);
@@ -123,6 +148,7 @@ export function ChatShell() {
     {signingIn ? <MascotLoader label={signedInWallet ? "Closing your wallet session…" : "Opening the wallet chooser…"} /> : null}
     {selectedSpecialist ? <SpecialistDialog specialist={selectedSpecialist} onClose={closeSpecialist} /> : null}
     {approvalInboxOpen ? <ApprovalDialog approvals={approvals} onClose={() => setApprovalInboxOpen(false)} onReview={(approval) => void reviewApproval(approval)} /> : null}
+    {balanceDialogOpen && balance ? <BalanceDialog native={balance} tokens={tokenBalances} onClose={() => setBalanceDialogOpen(false)} /> : null}
     <Sidebar open={sidebarOpen} history={history} historyReady={historyReady} aiUsage={aiUsage} onClose={() => setSidebarOpen(false)} onNewTask={() => { setSelectedTask(null); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} onSpecialist={(specialist) => { specialistTrigger.current = document.activeElement as HTMLElement; setSelectedSpecialist(specialist); }} onHistory={(task) => { setSelectedTask(task); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} />
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex min-h-16 shrink-0 items-center gap-2 border-b border-border px-3 sm:px-5">
@@ -130,7 +156,7 @@ export function ChatShell() {
         <div className="flex items-center gap-2 text-sm font-semibold"><MascotMark size={28} /><span className="hidden sm:inline">Task workspace</span></div>
         <div className="ml-auto flex items-center gap-2">
           {signedInWallet ? <button type="button" aria-label={`Open action inbox${approvals.length ? `, ${approvals.length} pending` : ""}`} onClick={() => setApprovalInboxOpen(true)} className="relative grid size-10 place-items-center rounded-full border border-border hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><Bell className="size-4" aria-hidden="true" />{approvals.length ? <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 font-mono text-[10px] font-semibold text-destructive-foreground">{Math.min(99, approvals.length)}</span> : null}</button> : null}
-          {signedInWallet && balance ? <div className="hidden rounded-full bg-muted px-3 py-2 text-xs sm:block"><span className="font-mono tabular-nums">{Number(balance.balance_mon).toLocaleString(undefined, { maximumFractionDigits: 4 })} MON</span><span className="ml-2 text-muted-foreground">Testnet</span></div> : null}
+          {signedInWallet && balance ? <button type="button" aria-label="View Testnet token balances" onClick={() => setBalanceDialogOpen(true)} className="min-h-10 rounded-full bg-muted px-3 text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><span className="hidden font-mono tabular-nums sm:inline">{Number(balance.balance_mon).toLocaleString(undefined, { maximumFractionDigits: 4 })} MON</span><span className="sm:ml-2 text-muted-foreground">Balances</span></button> : null}
           <button type="button" aria-label={signedInWallet ? "Sign out wallet session" : "Connect wallet"} onClick={() => void (signedInWallet ? signOut() : signIn())} disabled={signingIn} className="flex min-h-10 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-60"><WalletCards className="size-4" aria-hidden="true" />{signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : "Connect wallet"}</button>
         </div>
       </header>

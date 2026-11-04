@@ -15,11 +15,13 @@ import {
   createOperatorTask,
   createScoutTask,
   createSentinelTask,
+  getSwapQuote,
   type CompletedTask,
   type FlowCompletedTask,
   type AiAttachmentInput,
   type OperatorStepInput,
   type Task,
+  type SwapQuote,
   waitForOperator,
   waitForTask,
   planAiTask,
@@ -28,9 +30,9 @@ import {
 import { planUnifiedTask } from "@/lib/task-planner";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
-import { connectWalletProvider, ensureMonadTestnet, monToWeiHex } from "@/lib/wallet-provider";
+import { connectWalletProvider, ensureMonadTestnet, erc20TransferData, monToWeiHex } from "@/lib/wallet-provider";
 
-type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask };
+type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask; swapQuote?: SwapQuote };
 type Attachment = { id: string; file: File; previewUrl: string | null; textContent: string | null };
 
 const MAX_ATTACHMENTS = DONADS_AI_POLICY.maxAttachmentsPerTask;
@@ -82,10 +84,20 @@ function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowComp
   const actionable = ["awaiting_approval", "authorized", "submitted"].includes(workflow.state);
   return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
     <div className="flex items-center justify-between gap-3"><span className="font-medium">Exact Monad Testnet intent</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px] capitalize">{workflow.state.replaceAll("_", " ")}</span></div>
-    <div><p className="font-mono text-base font-semibold tabular-nums">{payout.amount} MON</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">To {payout.recipient_address}</p></div>
+    <div><p className="font-mono text-base font-semibold tabular-nums">{payout.amount} {payout.asset}</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">To {payout.recipient_address}</p>{payout.token_contract ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">Token {payout.token_contract}</p> : null}</div>
     <p className="text-xs leading-5 text-muted-foreground">Your wallet must show this exact recipient and amount. DONADS reports completion only after the mined receipt matches both.</p>
     {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transaction" : "Approve in wallet and send"}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
     {workflow.execution ? <a href={`https://testnet.monadexplorer.com/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">View verified transaction <ExternalLink className="size-3.5" aria-hidden="true" /></a> : null}
+  </div>;
+}
+
+function SwapQuoteCard({ quote }: { quote: SwapQuote }) {
+  return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">Uniswap v3 simulation</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px]">Monad Testnet</span></div>
+    <div className="grid gap-2 sm:grid-cols-2"><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Input</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_in.amount} {quote.token_in.symbol}</p></div><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Quoted output</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_out.quoted_amount} {quote.token_out.symbol}</p></div></div>
+    <dl className="grid grid-cols-2 gap-2 text-xs"><div><dt className="text-muted-foreground">Minimum output</dt><dd className="mt-1 font-mono">{quote.token_out.minimum_amount} {quote.token_out.symbol}</dd></div><div><dt className="text-muted-foreground">Estimated impact</dt><dd className="mt-1 font-mono">{(quote.estimated_price_impact_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Max slippage</dt><dd className="mt-1 font-mono">{(quote.slippage_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Pool fee</dt><dd className="mt-1 font-mono">{(quote.fee / 10_000).toFixed(2)}%</dd></div></dl>
+    {quote.blocked ? <p role="alert" className="rounded-lg bg-destructive/5 p-3 text-xs leading-5 text-destructive">{quote.blocked_reason}</p> : <p className="rounded-lg bg-muted p-3 text-xs leading-5 text-muted-foreground">Quote simulation passed policy. Broadcasting remains disabled until the persisted approval and receipt-verification stage is connected.</p>}
+    <a href={quote.source} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring">Official deployment source <ExternalLink className="size-3.5" aria-hidden="true" /></a>
   </div>;
 }
 
@@ -152,6 +164,12 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
       plan = (await planAiTask(value, modelAttachments)).plan;
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
+      if (plan.kind === "swap") {
+        setProgress("Flow is querying and checking the allowlisted Uniswap pools…");
+        const quote = await getSwapQuote({ token_in: plan.tokenIn, token_out: plan.tokenOut, amount: plan.amount, slippage_bps: plan.slippageBps, max_price_impact_bps: plan.maxPriceImpactBps }, signal);
+        setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: quote.blocked ? quote.blocked_reason ?? "Sentinel blocked this quote." : "Flow produced a deterministic, non-broadcasting Uniswap v3 quote.", swapQuote: quote }]);
+        return;
+      }
       let completed: CompletedTask;
       if (plan.kind === "flow") {
         if (!walletAddress) throw new Error("Reconnect your wallet before preparing a transfer.");
@@ -160,8 +178,8 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           title: "Chat-initiated Monad transfer",
           purpose: plan.purpose,
           payer: walletAddress,
-          payouts: [{ recipient_name: "Recipient", recipient_address: plan.recipient, asset: "MON", amount: plan.amount, milestone: plan.purpose, deadline: null }],
-          approval_conditions: ["Exact sender, recipient, MON amount, and Monad Testnet chain approved"],
+          payouts: [{ recipient_name: "Recipient", recipient_address: plan.recipient, asset: plan.asset, amount: plan.amount, milestone: plan.purpose, deadline: null, token_contract: plan.tokenContract }],
+          approval_conditions: [`Exact sender, recipient, ${plan.asset} amount, token contract, and Monad Testnet chain approved`],
           linked_task_id: null,
         }, signal);
         completed = await waitForTask(queued.id, undefined, signal);
@@ -263,7 +281,10 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           const workflow = current.status.data.workflow;
           if (!from || from.toLowerCase() !== workflow.payer.toLowerCase()) throw new Error("Connected wallet does not match the wallet bound to this intent.");
           const payout = workflow.payouts[0];
-          transactionHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: payout.recipient_address, value: monToWeiHex(payout.amount) }] }) as string;
+          const transaction = payout.token_contract && payout.amount_atomic
+            ? { from, to: payout.token_contract, value: "0x0", data: erc20TransferData(payout.recipient_address, payout.amount_atomic) }
+            : { from, to: payout.recipient_address, value: monToWeiHex(payout.amount) };
+          transactionHash = await provider.request({ method: "eth_sendTransaction", params: [transaction] }) as string;
           rememberPendingFlowHash(task.id, transactionHash);
         }
         current = await recordFlowSubmission(task.id, transactionHash);
@@ -329,7 +350,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           <ol className="space-y-7 py-4" aria-live="polite">
             {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
-              <div className="min-w-0"><p>{message.text}</p>{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
+              <div className="min-w-0"><p>{message.text}</p>{message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} /> : null}{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
             </li>)}
           </ol>
         )}

@@ -24,8 +24,8 @@ export function pendingApprovalForTask(task: Task, now = Date.now()): PendingApp
       return approval(task, now, {
         bot: "flow",
         kind: "intent_review",
-        title: "Review MON transfer",
-        summary: `${payout.amount} MON to ${shortAddress(payout.recipient_address)}`,
+        title: `Review ${payout.asset} transfer`,
+        summary: `${payout.amount} ${payout.asset} to ${shortAddress(payout.recipient_address)}`,
         state: workflow.state,
         requested_at_ms: task.updated_at_ms,
       });
@@ -37,7 +37,7 @@ export function pendingApprovalForTask(task: Task, now = Date.now()): PendingApp
         bot: "flow",
         kind: "wallet_signature",
         title: "Wallet signature required",
-        summary: `Confirm ${payout.amount} MON in your mobile wallet`,
+        summary: `Confirm ${payout.amount} ${payout.asset} in your mobile wallet`,
         state: workflow.state,
         requested_at_ms: workflow.approval?.decided_at_ms ?? task.updated_at_ms,
       });

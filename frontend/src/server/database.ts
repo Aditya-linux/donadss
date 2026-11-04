@@ -93,6 +93,14 @@ export async function ensureSchema(): Promise<void> {
       created_at_ms BIGINT NOT NULL
     )`;
     await db`CREATE INDEX IF NOT EXISTS donads_ai_usage_owner_created_idx ON donads_ai_usage(owner_id, created_at_ms DESC)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      subscription JSONB NOT NULL,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE INDEX IF NOT EXISTS donads_push_subscriptions_owner_idx ON donads_push_subscriptions(owner_id)`;
   })();
   return schemaReady;
 }
@@ -268,4 +276,26 @@ export async function listRoutines(ownerId: string): Promise<OperatorRoutine[]> 
   const db = sql();
   const rows = await db`SELECT data FROM donads_routines WHERE owner_id = ${ownerId} ORDER BY (data->>'updated_at_ms')::bigint DESC` as Array<{ data: OperatorRoutine }>;
   return rows.map((row) => row.data);
+}
+
+export async function putPushSubscription(ownerId: string, subscription: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  const now = Date.now();
+  await db`INSERT INTO donads_push_subscriptions(endpoint, owner_id, subscription, created_at_ms, updated_at_ms)
+    VALUES (${subscription.endpoint}, ${ownerId}, ${JSON.stringify(subscription)}, ${now}, ${now})
+    ON CONFLICT(endpoint) DO UPDATE SET owner_id = EXCLUDED.owner_id, subscription = EXCLUDED.subscription, updated_at_ms = EXCLUDED.updated_at_ms`;
+}
+
+export async function deletePushSubscription(ownerId: string, endpoint: string): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`DELETE FROM donads_push_subscriptions WHERE owner_id = ${ownerId} AND endpoint = ${endpoint}`;
+}
+
+export async function listPushSubscriptions(ownerId: string): Promise<Array<{ endpoint: string; keys: { p256dh: string; auth: string } }>> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT subscription FROM donads_push_subscriptions WHERE owner_id = ${ownerId}` as Array<{ subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }>;
+  return rows.map((row) => row.subscription);
 }

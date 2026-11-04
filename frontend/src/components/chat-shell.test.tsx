@@ -25,4 +25,14 @@ describe("ChatShell", () => {
     await user.click(screen.getByRole("button", { name: "Start task" }));
     expect(await screen.findByText(/Connect and sign in with your wallet first/)).toBeInTheDocument();
   });
+
+  it("selects and removes task attachments from the composer", async () => {
+    const user = userEvent.setup();
+    render(<ChatShell />);
+    const file = new File(["Monad notes"], "notes.md", { type: "text/markdown" });
+    await user.upload(screen.getByLabelText("Attach files", { selector: "input" }), file);
+    expect(screen.getByText("notes.md")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove notes.md" }));
+    expect(screen.queryByText("notes.md")).not.toBeInTheDocument();
+  });
 });

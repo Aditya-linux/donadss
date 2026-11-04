@@ -3,6 +3,7 @@
 import { ArrowUp, CheckCircle2, CircleDollarSign, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { decodeFunctionResult, encodeDeployData, encodeFunctionData, getAddress, keccak256, stringToHex } from "viem";
 
 import { Mascot, MascotLoader, MascotMark, SpecialistMark } from "@/components/mascot";
 import { ReportDownloadButton } from "@/components/report-download-button";
@@ -10,6 +11,7 @@ import {
   applyFlowAction,
   applyOperatorAction,
   confirmFlowTransaction,
+  confirmSwapTransaction,
   createFlowTask,
   createGrowthTask,
   createOperatorTask,
@@ -31,6 +33,7 @@ import { planUnifiedTask } from "@/lib/task-planner";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
 import { connectWalletProvider, ensureMonadTestnet, erc20TransferData, monToWeiHex } from "@/lib/wallet-provider";
+import { DonadsEscrowAbi, DonadsEscrowBytecode, DonadsPolicyVaultAbi, DonadsPolicyVaultBytecode } from "@/contracts/generated";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask; swapQuote?: SwapQuote };
 type Attachment = { id: string; file: File; previewUrl: string | null; textContent: string | null };
@@ -39,11 +42,33 @@ const MAX_ATTACHMENTS = DONADS_AI_POLICY.maxAttachmentsPerTask;
 const MAX_FILE_BYTES = DONADS_AI_POLICY.maxAttachmentBytes;
 const MAX_TEXT_CHARACTERS = 40_000;
 
+function quoteExpired(expiresAtMs: number): boolean {
+  return new Date().getTime() >= expiresAtMs;
+}
+
+function unixNow(): number {
+  return Math.floor(new Date().getTime() / 1_000);
+}
+
+function unixIso(value: bigint): string {
+  return new Date(Number(value) * 1_000).toISOString();
+}
+
+function currentTimeMs(): number {
+  return new Date().getTime();
+}
+
+function currentIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 const examples = [
   "Research https://monad.xyz and summarize the key facts",
   "Research https://monad.xyz and create a 7-day launch campaign",
   "Scan this contract bytecode: 0x6000ff",
   "Send 0.01 MON to 0xYOUR_WALLET_ADDRESS for testing",
+  "Deploy my policy vault",
+  "Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed",
 ];
 
 const specialistIcons = {
@@ -91,12 +116,12 @@ function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowComp
   </div>;
 }
 
-function SwapQuoteCard({ quote }: { quote: SwapQuote }) {
+function SwapQuoteCard({ quote, working, onExecute }: { quote: SwapQuote; working: boolean; onExecute: () => void }) {
   return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
     <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">Uniswap v3 simulation</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px]">Monad Testnet</span></div>
     <div className="grid gap-2 sm:grid-cols-2"><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Input</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_in.amount} {quote.token_in.symbol}</p></div><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Quoted output</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_out.quoted_amount} {quote.token_out.symbol}</p></div></div>
     <dl className="grid grid-cols-2 gap-2 text-xs"><div><dt className="text-muted-foreground">Minimum output</dt><dd className="mt-1 font-mono">{quote.token_out.minimum_amount} {quote.token_out.symbol}</dd></div><div><dt className="text-muted-foreground">Estimated impact</dt><dd className="mt-1 font-mono">{(quote.estimated_price_impact_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Max slippage</dt><dd className="mt-1 font-mono">{(quote.slippage_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Pool fee</dt><dd className="mt-1 font-mono">{(quote.fee / 10_000).toFixed(2)}%</dd></div></dl>
-    {quote.blocked ? <p role="alert" className="rounded-lg bg-destructive/5 p-3 text-xs leading-5 text-destructive">{quote.blocked_reason}</p> : <p className="rounded-lg bg-muted p-3 text-xs leading-5 text-muted-foreground">Quote simulation passed policy. Broadcasting remains disabled until the persisted approval and receipt-verification stage is connected.</p>}
+    {quote.blocked ? <p role="alert" className="rounded-lg bg-destructive/5 p-3 text-xs leading-5 text-destructive">{quote.blocked_reason}</p> : quote.execution ? <div className="rounded-lg bg-muted p-3 text-xs leading-5"><p className="font-medium">Verified swap completed</p><p className="mt-1 font-mono break-all text-muted-foreground">{quote.execution.swap_transaction_hash}</p></div> : <div className="space-y-2"><p className="rounded-lg bg-muted p-3 text-xs leading-5 text-muted-foreground">Quote passed policy. Your wallet will approve only the exact input amount, then submit the exact minimum-output swap.</p><button type="button" disabled={working} onClick={onExecute} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : "Approve token and execute swap"}</button></div>}
     <a href={quote.source} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring">Official deployment source <ExternalLink className="size-3.5" aria-hidden="true" /></a>
   </div>;
 }
@@ -164,6 +189,69 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
       plan = (await planAiTask(value, modelAttachments)).plan;
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
+      if (plan.kind === "vault_deploy" || plan.kind === "session_configure" || plan.kind === "session_revoke" || plan.kind === "escrow_create") {
+        if (!walletAddress) throw new Error("Reconnect your wallet before preparing this contract action.");
+        const provider = await connectWalletProvider();
+        await ensureMonadTestnet(provider);
+        const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+        const from = accounts[0];
+        if (!from || from.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Connected wallet does not match the signed-in DONADS wallet.");
+        if (plan.kind === "vault_deploy") {
+          setProgress("Flow is deploying your owner-controlled policy vault…");
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from, data: DonadsPolicyVaultBytecode, value: "0x0" }] }) as string;
+          const receipt = await waitForWalletReceipt(provider, hash);
+          if (!receipt.contractAddress) throw new Error("Vault deployment receipt did not contain a contract address.");
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Your policy vault was deployed at ${receipt.contractAddress}. You remain its owner. Transaction: ${hash}` }]);
+          return;
+        }
+        if (plan.kind === "escrow_create") {
+          if (plan.refundHours < 1 || plan.refundHours > 8_760) throw new Error("Escrow refund time must be between 1 hour and 365 days.");
+          const refundAfter = BigInt(unixNow() + plan.refundHours * 3_600);
+          const data = encodeDeployData({ abi: DonadsEscrowAbi, bytecode: DonadsEscrowBytecode, args: [getAddress(from), getAddress(plan.seller), getAddress(plan.arbiter), refundAfter, keccak256(stringToHex(plan.terms))] });
+          setProgress("Flow is waiting for your escrow funding approval…");
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from, data, value: monToWeiHex(plan.amount) }] }) as string;
+          const receipt = await waitForWalletReceipt(provider, hash);
+          if (!receipt.contractAddress) throw new Error("Escrow deployment receipt did not contain a contract address.");
+          const termsHash = keccak256(stringToHex(plan.terms));
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Funded escrow deployed at ${receipt.contractAddress}. Terms hash: ${termsHash}. Transaction: ${hash}` }]);
+          return;
+        }
+        if (plan.kind === "session_configure") {
+          if (plan.durationHours < 1 || plan.durationHours > 8_760) throw new Error("Session duration must be between 1 hour and 365 days.");
+          const perTransaction = BigInt(monToWeiHex(plan.perTransaction));
+          const daily = BigInt(monToWeiHex(plan.daily));
+          if (daily < perTransaction) throw new Error("Daily session limit must be at least the per-transaction limit.");
+          const ownerCall = encodeFunctionData({ abi: DonadsPolicyVaultAbi, functionName: "owner" });
+          const ownerResult = await provider.request({ method: "eth_call", params: [{ to: plan.vault, data: ownerCall }, "latest"] }) as `0x${string}`;
+          const vaultOwner = decodeFunctionResult({ abi: DonadsPolicyVaultAbi, functionName: "owner", data: ownerResult });
+          if (vaultOwner.toLowerCase() !== from.toLowerCase()) throw new Error("Connected wallet is not the owner of this policy vault.");
+          const recipientData = encodeFunctionData({ abi: DonadsPolicyVaultAbi, functionName: "setRecipientAllowed", args: [getAddress(plan.recipient), true] });
+          setProgress("Flow is requesting the recipient permission…");
+          const recipientHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.vault, data: recipientData, value: "0x0" }] }) as string;
+          await waitForWalletReceipt(provider, recipientHash);
+          const expiry = BigInt(unixNow() + plan.durationHours * 3_600);
+          const sessionData = encodeFunctionData({ abi: DonadsPolicyVaultAbi, functionName: "configureSession", args: [getAddress(plan.sessionKey), expiry, perTransaction, daily] });
+          setProgress("Flow is requesting the bounded session permission…");
+          const sessionHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.vault, data: sessionData, value: "0x0" }] }) as string;
+          await waitForWalletReceipt(provider, sessionHash);
+          const sessionKey = plan.sessionKey;
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${sessionKey} is permitted until ${unixIso(expiry)}, only for the approved recipient and limits. Permission transaction: ${sessionHash}` }]);
+          return;
+        }
+        if (plan.kind === "session_revoke") {
+          const ownerCall = encodeFunctionData({ abi: DonadsPolicyVaultAbi, functionName: "owner" });
+          const ownerResult = await provider.request({ method: "eth_call", params: [{ to: plan.vault, data: ownerCall }, "latest"] }) as `0x${string}`;
+          const vaultOwner = decodeFunctionResult({ abi: DonadsPolicyVaultAbi, functionName: "owner", data: ownerResult });
+          if (vaultOwner.toLowerCase() !== from.toLowerCase()) throw new Error("Connected wallet is not the owner of this policy vault.");
+          const revokeData = encodeFunctionData({ abi: DonadsPolicyVaultAbi, functionName: "revokeSession", args: [getAddress(plan.sessionKey)] });
+          setProgress("Flow is revoking the session permission…");
+          const revokeHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: plan.vault, data: revokeData, value: "0x0" }] }) as string;
+          await waitForWalletReceipt(provider, revokeHash);
+          const { sessionKey: revokedSession, vault } = plan;
+          setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: `Session ${revokedSession} was revoked on vault ${vault}. Transaction: ${revokeHash}` }]);
+          return;
+        }
+      }
       if (plan.kind === "swap") {
         setProgress("Flow is querying and checking the allowlisted Uniswap pools…");
         const quote = await getSwapQuote({ token_in: plan.tokenIn, token_out: plan.tokenOut, amount: plan.amount, slippage_bps: plan.slippageBps, max_price_impact_bps: plan.maxPriceImpactBps }, signal);
@@ -194,10 +282,10 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         completed = await waitForTask(queued.id, undefined, signal);
       } else if (plan.kind === "growth") {
         setProgress("Growth is building a review-ready campaign…");
-        const now = Date.now();
+        const now = currentTimeMs();
         const queued = await createGrowthTask({
           objective: plan.objective,
-          start_date: new Date().toISOString().slice(0, 10),
+          start_date: currentIsoDate(),
           duration_days: 7,
           platforms: ["x", "linkedin", "community"],
           profile: {
@@ -217,7 +305,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         const campaign: OperatorStepInput = {
           id: "campaign", title: "Create the campaign", bot: "growth", prompt: plan.objective,
           input: {
-            objective: plan.objective, start_date: new Date().toISOString().slice(0, 10), duration_days: 7, platforms: ["x", "linkedin", "community"],
+            objective: plan.objective, start_date: currentIsoDate(), duration_days: 7, platforms: ["x", "linkedin", "community"],
             profile: { id: "donads-default", project_name: "DONADS project", product_description: "The sourced project in this task", target_audience: "Web3 users and builders", preferred_tone: "precise, minimal, and playful", terminology: [], value_propositions: ["Evidence-backed communication"], approved_links: plan.sources, prohibited_terms: [], previous_approved_examples: [] }, evidence: [],
           }, depends_on: ["research"],
         };
@@ -313,6 +401,61 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
     }
   }
 
+  function updateSwapMessage(messageId: string, quote: SwapQuote) {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: quote.execution ? "Flow verified the completed Uniswap v3 swap and its balance changes." : message.text, swapQuote: quote } : message));
+    onTaskCompleted?.();
+  }
+
+  async function waitForWalletReceipt(provider: Awaited<ReturnType<typeof connectWalletProvider>>, hash: string): Promise<{ status?: string; contractAddress?: string }> {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] }) as { status?: string } | null;
+      if (receipt) {
+        if (receipt.status !== "0x1") throw new Error("Wallet transaction reverted on Monad Testnet.");
+        return receipt;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+    }
+    throw new Error("Transaction was not mined before the timeout. Check the explorer before retrying.");
+  }
+
+  async function executeSwap(messageId: string, quote: SwapQuote) {
+    if (quote.blocked || quote.execution) return;
+    setWorking(true);
+    setError(null);
+    try {
+      if (quoteExpired(quote.expires_at_ms)) throw new Error("This swap quote expired. Request a fresh quote before signing.");
+      setProgress("Flow is requesting the exact token approval…");
+      const provider = await connectWalletProvider();
+      await ensureMonadTestnet(provider);
+      const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+      const from = accounts[0];
+      if (!from || !walletAddress || from.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Connected wallet does not match the wallet that requested this quote.");
+      const approvalHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: quote.token_in.contract, value: "0x0", data: quote.approval_calldata }] }) as string;
+      await waitForWalletReceipt(provider, approvalHash);
+      if (quoteExpired(quote.expires_at_ms)) throw new Error("The quote expired while approval was mining. The exact approval is safe, but request a fresh quote before swapping.");
+      setProgress("Flow is requesting the exact minimum-output swap…");
+      const swapHash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: quote.router, value: "0x0", data: quote.swap_calldata }] }) as string;
+      await waitForWalletReceipt(provider, swapHash);
+      setProgress("Flow is verifying both receipts and token balance changes…");
+      let lastError: Error | undefined;
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        try {
+          updateSwapMessage(messageId, await confirmSwapTransaction({ quote_id: quote.quote_id, approval_transaction_hash: approvalHash, swap_transaction_hash: swapHash }));
+          return;
+        } catch (cause) {
+          lastError = cause instanceof Error ? cause : new Error("Swap receipt verification failed.");
+          if (!/not been mined/i.test(lastError.message)) throw lastError;
+          await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        }
+      }
+      throw lastError ?? new Error("Swap verification timed out.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The swap could not be completed.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const value = prompt.trim();
@@ -350,7 +493,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           <ol className="space-y-7 py-4" aria-live="polite">
             {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
-              <div className="min-w-0"><p>{message.text}</p>{message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} /> : null}{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
+              <div className="min-w-0"><p>{message.text}</p>{message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}{message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}{message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}{message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}</div>
             </li>)}
           </ol>
         )}

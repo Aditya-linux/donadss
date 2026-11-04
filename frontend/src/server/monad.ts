@@ -13,6 +13,7 @@ const erc20Abi = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
+  { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
 ] as const;
 
 export async function monadRpc(method: string, params: unknown[]): Promise<unknown> {
@@ -60,6 +61,13 @@ export async function readErc20Balance(contract: string, account: string): Promi
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "balanceOf", args: [getAddress(account)] });
   const result = await call(getAddress(contract), data);
   return decodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", data: result });
+}
+
+export async function readErc20Allowance(contract: string, owner: string, spender: string): Promise<bigint> {
+  if (!isAddress(contract) || !isAddress(owner) || !isAddress(spender)) throw new Error("Token allowance requires valid contract and wallet addresses.");
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [getAddress(owner), getAddress(spender)] });
+  const result = await call(getAddress(contract), data);
+  return decodeFunctionResult({ abi: erc20Abi, functionName: "allowance", data: result });
 }
 
 export function tokenAmountToAtomic(amount: string, decimals: number): bigint {

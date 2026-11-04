@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { decodeFunctionResult, encodeFunctionData, getAddress, isAddress } from "viem";
 
-import { encodeErc20Approval, formatTokenAmount, monadRpc, readErc20Metadata, tokenAmountToAtomic } from "@/server/monad";
+import { encodeErc20Approval, formatTokenAmount, monadRpc, readErc20Balance, readErc20Metadata, tokenAmountToAtomic } from "@/server/monad";
 
 export const MONAD_TESTNET_UNISWAP = {
   quoterV2: "0x1b4e313fef15630af3e6f2de550dbf4cc9d3081d",
@@ -88,6 +89,12 @@ export type UniswapQuote = {
   blocked: boolean;
   blocked_reason: string | null;
   source: string;
+  quote_id: string;
+  quoted_at_ms: number;
+  expires_at_ms: number;
+  input_balance_before_atomic: string;
+  output_balance_before_atomic: string;
+  execution?: { approval_transaction_hash: string; swap_transaction_hash: string; block_number: number; output_amount_atomic: string; confirmed_at_ms: number };
 };
 
 export async function quoteUniswapSwap(input: { tokenIn: string; tokenOut: string; amount: string; recipient: string; slippageBps: number; maxPriceImpactBps: number }): Promise<UniswapQuote> {
@@ -98,7 +105,12 @@ export async function quoteUniswapSwap(input: { tokenIn: string; tokenOut: strin
   const [tokenIn, tokenOut] = await Promise.all([readErc20Metadata(input.tokenIn), readErc20Metadata(input.tokenOut)]);
   if (tokenIn.contract === tokenOut.contract) throw new Error("Input and output tokens must differ.");
   const amountIn = tokenAmountToAtomic(input.amount, tokenIn.decimals);
-  const quote = await bestQuote(tokenIn.contract, tokenOut.contract, amountIn);
+  const [quote, inputBalanceBefore, outputBalanceBefore] = await Promise.all([
+    bestQuote(tokenIn.contract, tokenOut.contract, amountIn),
+    readErc20Balance(tokenIn.contract, input.recipient),
+    readErc20Balance(tokenOut.contract, input.recipient),
+  ]);
+  if (inputBalanceBefore < amountIn) throw new Error(`Wallet has insufficient ${tokenIn.symbol} for this swap.`);
   const referenceIn = amountIn / BigInt(100) > BigInt(0) ? amountIn / BigInt(100) : amountIn;
   const reference = await quoteAtFee(tokenIn.contract, tokenOut.contract, referenceIn, quote.fee) ?? quote;
   const impact = priceImpactBps(quote.amountOut, reference.amountOut, amountIn, referenceIn);
@@ -106,6 +118,7 @@ export async function quoteUniswapSwap(input: { tokenIn: string; tokenOut: strin
   const blocked = impact > input.maxPriceImpactBps;
   const blockedReason = blocked ? `Blocked because estimated price impact is ${(impact / 100).toFixed(2)}%, above your ${(input.maxPriceImpactBps / 100).toFixed(2)}% policy.` : null;
   const swapCalldata = encodeFunctionData({ abi: routerAbi, functionName: "exactInputSingle", args: [{ tokenIn: tokenIn.contract as `0x${string}`, tokenOut: tokenOut.contract as `0x${string}`, fee: quote.fee, recipient: getAddress(input.recipient), amountIn, amountOutMinimum: minOut, sqrtPriceLimitX96: BigInt(0) }] });
+  const quotedAt = Date.now();
   return {
     adapter: "uniswap-v3", chain_id: 10143,
     token_in: { ...tokenIn, amount: input.amount, amount_atomic: amountIn.toString() },
@@ -114,5 +127,7 @@ export async function quoteUniswapSwap(input: { tokenIn: string; tokenOut: strin
     quoter: MONAD_TESTNET_UNISWAP.quoterV2, router: MONAD_TESTNET_UNISWAP.swapRouter02,
     approval_calldata: encodeErc20Approval(MONAD_TESTNET_UNISWAP.swapRouter02, amountIn),
     swap_calldata: swapCalldata, simulation: "quoted", blocked, blocked_reason: blockedReason, source: MONAD_TESTNET_UNISWAP.source,
+    quote_id: randomUUID(), quoted_at_ms: quotedAt, expires_at_ms: quotedAt + 10 * 60 * 1_000,
+    input_balance_before_atomic: inputBalanceBefore.toString(), output_balance_before_atomic: outputBalanceBefore.toString(),
   };
 }

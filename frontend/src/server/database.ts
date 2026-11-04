@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
 import type { BrandProfile, OperatorRoutine, Task } from "@/lib/donads-api";
+import type { UniswapQuote } from "@/server/uniswap";
 
 type ChallengeRow = {
   address: string;
@@ -101,6 +102,15 @@ export async function ensureSchema(): Promise<void> {
       updated_at_ms BIGINT NOT NULL
     )`;
     await db`CREATE INDEX IF NOT EXISTS donads_push_subscriptions_owner_idx ON donads_push_subscriptions(owner_id)`;
+    await db`CREATE TABLE IF NOT EXISTS donads_swap_quotes (
+      quote_id UUID PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      data JSONB NOT NULL,
+      state TEXT NOT NULL,
+      expires_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    )`;
+    await db`CREATE INDEX IF NOT EXISTS donads_swap_quotes_owner_idx ON donads_swap_quotes(owner_id, updated_at_ms DESC)`;
   })();
   return schemaReady;
 }
@@ -298,4 +308,25 @@ export async function listPushSubscriptions(ownerId: string): Promise<Array<{ en
   const db = sql();
   const rows = await db`SELECT subscription FROM donads_push_subscriptions WHERE owner_id = ${ownerId}` as Array<{ subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }>;
   return rows.map((row) => row.subscription);
+}
+
+export async function putSwapQuote(ownerId: string, quote: UniswapQuote): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`INSERT INTO donads_swap_quotes(quote_id, owner_id, data, state, expires_at_ms, updated_at_ms)
+    VALUES (${quote.quote_id}, ${ownerId}, ${JSON.stringify(quote)}, 'quoted', ${quote.expires_at_ms}, ${Date.now()})`;
+}
+
+export async function getSwapQuote(ownerId: string, quoteId: string): Promise<UniswapQuote | null> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`SELECT data FROM donads_swap_quotes WHERE quote_id = ${quoteId} AND owner_id = ${ownerId} LIMIT 1` as Array<{ data: UniswapQuote }>;
+  return rows[0]?.data ?? null;
+}
+
+export async function completeSwapQuote(ownerId: string, quote: UniswapQuote): Promise<void> {
+  await ensureSchema();
+  const db = sql();
+  await db`UPDATE donads_swap_quotes SET data = ${JSON.stringify(quote)}, state = 'confirmed', updated_at_ms = ${Date.now()}
+    WHERE quote_id = ${quote.quote_id} AND owner_id = ${ownerId} AND state = 'quoted'`;
 }

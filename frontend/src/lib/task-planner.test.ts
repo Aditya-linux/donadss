@@ -39,4 +39,17 @@ describe("planUnifiedTask", () => {
       kind: "swap", amount: "1", inputAsset: "USDC", outputAsset: "DAI", slippageBps: 50, maxPriceImpactBps: 200,
     });
   });
+
+  it("routes policy-vault deployment and bounded session permissions deterministically", () => {
+    expect(planUnifiedTask("Deploy my policy vault")).toEqual({ kind: "vault_deploy" });
+    expect(planUnifiedTask("Allow session 0x1111111111111111111111111111111111111111 on vault 0x2222222222222222222222222222222222222222 to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0x3333333333333333333333333333333333333333")).toEqual({
+      kind: "session_configure", sessionKey: "0x1111111111111111111111111111111111111111", vault: "0x2222222222222222222222222222222222222222", perTransaction: "0.1", daily: "1", durationHours: 24, recipient: "0x3333333333333333333333333333333333333333",
+    });
+  });
+
+  it("routes funded P2P escrow creation with explicit parties and terms", () => {
+    expect(planUnifiedTask("Create escrow 1 MON for 0x1111111111111111111111111111111111111111 with arbiter 0x2222222222222222222222222222222222222222 refund after 24 hours terms Product delivered as agreed")).toEqual({
+      kind: "escrow_create", amount: "1", seller: "0x1111111111111111111111111111111111111111", arbiter: "0x2222222222222222222222222222222222222222", refundHours: 24, terms: "Product delivered as agreed",
+    });
+  });
 });

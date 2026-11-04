@@ -20,7 +20,7 @@ DONADS is purpose-built for crypto execution on Monad. Its differentiation is no
 - Commerce requires both verified on-chain payment and a real merchant order receipt before reporting completion.
 - Operator can coordinate specialists, but cannot inherit wallet-signing authority or silently move funds.
 - Task history, evidence, child-agent events, transaction receipts, and PDF reports create an auditable completion record.
-- The planned policy vault adds revocable session permissions with recipient, value, daily, expiry, and replay limits on Monad.
+- The policy vault provides revocable session permissions with recipient, per-transaction, daily, expiry, replay, pause, and owner-withdrawal controls on Monad Testnet.
 
 The product thesis is focused: use a general agent for broad browser and office work; use DONADS when a Monad task needs constrained authority, explicit wallet consent, deterministic validation, and cryptographic proof of completion. The immediate goal is to make that focused path excellent before expanding into a general cloud-computer platform.
 
@@ -47,7 +47,7 @@ The target platform includes persistent cloud workers, authenticated browsers, c
 | Scout | Fetches up to five user-supplied public URLs, blocks private-network targets, extracts evidence, and returns citations | Search provider, authenticated browser, broader live discovery |
 | Commerce | Validates source-linked crypto offers and enforces offer → exact approval → invoice → confirmed payment → verified order-receipt state transitions | First authorized physical-product merchant adapter, authenticated checkout, shipping/refund recovery |
 | Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
-| Flow | Routes exact native MON and ERC-20 transfers from unified chat, validates token metadata and balances, requests the user's wallet, checkpoints the submitted hash, and verifies mined calldata, receipts, and balance deltas server-side | Deployed policy vault, DEX swap execution, replacement/dropped-transaction recovery |
+| Flow | Routes exact native MON and ERC-20 transfers; deploys owner-controlled policy vaults; configures/revokes bounded sessions; creates funded P2P escrows; and implements guarded Uniswap approval, swap, and receipt verification | Official live testnet DEX bytecode, saved contract-action history, replacement/dropped-transaction recovery |
 | Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
 | Sentinel | Performs bytecode triage and enforces Flow network, sender, recipient, asset, and amount policy checks | Deployed-vault state, merchant/domain policy, prompt-injection controls |
 
@@ -59,7 +59,11 @@ A Monad transfer is complete only when the configured RPC proves it is on the ex
 
 ERC-20 chat commands use the explicit form `Send 10 USDC token 0xTOKEN_CONTRACT to 0xRECIPIENT`. Flow reads the contract code, symbol, decimals, and balances from Monad Testnet; rejects symbol, precision, or balance mismatches; builds the standard `transfer(address,uint256)` calldata; and requires the mined transaction plus exact recipient balance delta to match before completion. The balance control shows live MON plus every verified token contract present in that wallet's DONADS history.
 
-Swap simulations are coded against the allowlisted Uniswap v3 Monad Testnet QuoterV2 and SwapRouter02 addresses from Uniswap's official deployment feed. The explicit chat form is `Swap 1 USDC token 0xINPUT for DAI token 0xOUTPUT max 0.5% slippage`. DONADS first requires both official addresses to contain bytecode, then checks both token contracts, tests supported fee tiers, calculates integer minimum output, estimates price impact against a smaller same-pool quote, and explains policy blocks. On 2026-11-02 the official Monad Testnet RPC returned no bytecode for every Uniswap v2, v3, and Universal Router address currently marked active in the official feed, so the adapter correctly remains disabled rather than fabricating a quote. Approval, swap submission, and post-swap receipt/balance verification cannot be enabled until an approved router is live.
+The Uniswap v3 adapter uses the Monad Testnet QuoterV2 and SwapRouter02 addresses from Uniswap's official deployment feed. The explicit chat form is `Swap 1 USDC token 0xINPUT for DAI token 0xOUTPUT max 0.5% slippage`. Quotes are persisted with a ten-minute expiry and pre-swap balances. After an accepted quote, the wallet approves only the exact input, submits exact router calldata, and the server certifies both receipts, sender, token, router, calldata, quote block time, input delta, and minimum output. On 2026-11-03 the official Monad Testnet RPC still returned zero bytecode for the listed QuoterV2, SwapRouter02, and Universal Router, so this execution path remains correctly fail-closed until those official deployments actually exist.
+
+P2P escrow is available through `Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed`. The connected buyer wallet deploys and funds a dedicated contract. The contract supports buyer release, seller-approved refund, buyer timeout refund, buyer/seller dispute, arbiter resolution, a hashed milestone description, and on-chain lifecycle receipts.
+
+Restricted session permissions are wallet-driven. `Deploy my policy vault` deploys a vault owned by the connected user. A session address held in an external wallet or secure signer can then be bounded with `Allow session 0xSESSION on vault 0xVAULT to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0xRECIPIENT`, or immediately disabled with `Revoke session 0xSESSION on vault 0xVAULT`. DONADS never creates, receives, or stores the session private key.
 
 The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for testing`. Financial values bypass the language model and are parsed deterministically. Flow then exposes the exact intent in the conversation. Its lifecycle is `awaiting approval → authorized → submitted → confirmed`; the submitted transaction hash is checkpointed server-side and temporarily retained in the originating browser so a refresh, slow receipt, or interrupted API call resumes verification instead of broadcasting a duplicate payment.
 
@@ -111,9 +115,9 @@ Each case needs an automated test where practical and a saved manual receipt. A 
 
 DONADS agents do **not** currently own wallets, private keys, or independent funds. Wallet sign-in proves task ownership but cannot move money. For a payment, Flow creates an exact intent containing the Monad network, payer, recipient, asset, and amount. Sentinel validates that intent, the browser wallet shows the final transaction for explicit user approval, and the wallet signs and broadcasts it. DONADS then reads the transaction from Monad RPC and records completion only after the receipt and exact values match.
 
-Operator can coordinate Flow or Commerce, but it cannot sign on their behalf. Its permission model explicitly disables signing and fund movement. The policy-vault contract is the future bounded-autonomy path: a user may fund a smart-contract vault and delegate a revocable session address with recipient, per-transaction, daily, expiry, and replay limits. That vault must be deployed, audited, funded, and approved on testnet before any agent-like automated payment is enabled.
+Operator can coordinate Flow or Commerce, but it cannot sign on their behalf. Its permission model explicitly disables signing and fund movement. A user can now deploy a policy vault from chat and delegate a separately secured session address with recipient, per-transaction, daily, expiry, pause, and replay limits. The user remains owner and can revoke the session at any time. DONADS does not host session private keys; production autonomous execution still requires an approved KMS or wallet signer and the deferred security audit.
 
-Chat-directed swaps and autonomous session-key spending remain disabled. The planned Flow swap adapter must use approved Monad Testnet DEX contracts, deterministic quote and calldata construction, token/router/function allowlists, limited approvals, minimum output, slippage and price-impact limits, simulation, explicit wallet confirmation, and post-transaction balance verification before it can report a trade as complete.
+Chat-directed swap execution is fully wired behind a live-code guard. It remains unavailable while the official testnet router addresses contain no bytecode. Autonomous session-key signing remains disabled until a secure signer is selected; contract permissions alone never expose or custody a private key.
 
 Commerce adds merchant evidence around the payment: verified offer → exact user approval → merchant invoice → wallet payment → Monad receipt → merchant order receipt. Without both the chain receipt and merchant order receipt, the product remains unordered.
 
@@ -240,7 +244,7 @@ This generates an unfunded ephemeral wallet in memory, signs into the real API, 
 
 ## Path to the first real product order
 
-1. Deploy and audit the policy vault on Monad Testnet using a funded test wallet; never share its private key.
+1. Use `Deploy my policy vault` with a funded test wallet, then record its verified address; never share either owner or session private keys.
 2. Add dropped, replaced, reverted, duplicate, and delayed transaction recovery.
 3. Integrate one authorized merchant that sells physical products and directly accepts supported crypto through a documented checkout API.
 4. Bind merchant invoice, wallet payment, fulfillment, order receipt, refund, and support status into one idempotent workflow.
@@ -249,4 +253,4 @@ This generates an unfunded ephemeral wallet in memory, signs into the real API, 
 7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
 8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
 
-The immediate next implementation item is ERC-20 transfer support in Flow. The merchant connector remains seventh in the frozen delivery sequence and extends Commerce; it does not add a new bot.
+The remaining external testnet gates are a live official DEX deployment, user-approved funding/deployment transactions, and an externally secured session signer. The merchant connector remains seventh in the frozen delivery sequence and extends Commerce; it does not add a new bot.

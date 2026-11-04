@@ -6,6 +6,10 @@ export type UnifiedPlan =
   | { kind: "flow"; recipient: string; amount: string; purpose: string; asset: "MON"; tokenContract: null }
   | { kind: "flow"; recipient: string; amount: string; purpose: string; asset: string; tokenContract: string }
   | { kind: "swap"; amount: string; inputAsset: string; tokenIn: string; outputAsset: string; tokenOut: string; slippageBps: number; maxPriceImpactBps: number }
+  | { kind: "vault_deploy" }
+  | { kind: "session_configure"; sessionKey: string; vault: string; recipient: string; perTransaction: string; daily: string; durationHours: number }
+  | { kind: "session_revoke"; sessionKey: string; vault: string }
+  | { kind: "escrow_create"; amount: string; seller: string; arbiter: string; refundHours: number; terms: string }
   | { kind: "clarify"; message: string };
 
 function urlsIn(value: string): string[] {
@@ -21,8 +25,17 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const amount = prompt.match(/\b(\d+(?:\.\d{1,18})?)\s*MON\b/i)?.[1];
   const tokenTransfer = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+(?:token|contract)\s+(0x[0-9a-fA-F]{40})\s+to\s+(0x[0-9a-fA-F]{40})\b/i);
   const swap = prompt.match(/\bswap\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})\s+for\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})(?:\s+(?:with\s+)?max(?:imum)?\s+(\d+(?:\.\d{1,2})?)%\s+slippage)?/i);
+  const escrow = prompt.match(/\bcreate\s+escrow\s+(\d+(?:\.\d{1,18})?)\s+MON\s+for\s+(0x[0-9a-fA-F]{40})\s+with\s+arbiter\s+(0x[0-9a-fA-F]{40})\s+refund\s+after\s+(\d{1,4})\s+hours?\s+terms\s+(.{3,500})$/i);
+  const configureSession = prompt.match(/\ballow\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})\s+to\s+send\s+up\s+to\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+transaction\s+and\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+day\s+for\s+(\d{1,4})\s+hours?\s+to\s+(0x[0-9a-fA-F]{40})/i);
+  const revokeSession = prompt.match(/\brevoke\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})/i);
 
   if (!prompt) return { kind: "clarify", message: "Describe the outcome you want DONADS to complete." };
+  if (/\bdeploy\s+(?:my\s+)?policy\s+vault\b/i.test(prompt)) return { kind: "vault_deploy" };
+  if (escrow) return { kind: "escrow_create", amount: escrow[1], seller: escrow[2], arbiter: escrow[3], refundHours: Number(escrow[4]), terms: escrow[5].trim() };
+  if (configureSession) return { kind: "session_configure", sessionKey: configureSession[1], vault: configureSession[2], perTransaction: configureSession[3], daily: configureSession[4], durationHours: Number(configureSession[5]), recipient: configureSession[6] };
+  if (revokeSession) return { kind: "session_revoke", sessionKey: revokeSession[1], vault: revokeSession[2] };
+  if (/\bescrow\b/i.test(prompt)) return { kind: "clarify", message: "Use: ‘Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed’." };
+  if (/\b(?:policy vault|session permission|session key)\b/i.test(prompt)) return { kind: "clarify", message: "Deploy with ‘Deploy my policy vault’. Then configure an externally secured session address with: ‘Allow session 0xSESSION on vault 0xVAULT to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0xRECIPIENT’." };
   if (bytecode && /(audit|scan|bytecode|security|risk)/i.test(prompt)) return { kind: "sentinel", bytecode };
 
   const isCampaign = /(campaign|marketing|launch|content|posts?|growth|social)/i.test(prompt);

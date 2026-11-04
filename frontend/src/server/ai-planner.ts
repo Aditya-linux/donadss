@@ -25,7 +25,7 @@ function validateModelPlan(value: ModelPlan, original: string): UnifiedPlan {
 
 export async function planTask(ownerId: string, prompt: string, attachments: GeminiAttachment[] = []): Promise<{ plan: UnifiedPlan; mode: "model" | "deterministic"; fallback_reason: string | null }> {
   const fallback = planUnifiedTask(prompt);
-  if (/\b(pay|send|transfer|buy|order|purchase|checkout|trade|swap)\b/i.test(prompt)) {
+  if (/\b(pay|send|transfer|buy|order|purchase|checkout|trade|swap|escrow|vault|session)\b/i.test(prompt)) {
     return { plan: fallback, mode: "deterministic", fallback_reason: "Financial intents are routed and validated outside the model." };
   }
   if (!geminiConfigured()) return { plan: fallback, mode: "deterministic", fallback_reason: "Gemini API key is not configured." };

@@ -401,6 +401,11 @@ export async function getSwapQuote(input: { token_in: string; token_out: string;
   return readJson(response);
 }
 
+export async function confirmSwapTransaction(input: { quote_id: string; approval_transaction_hash: string; swap_transaction_hash: string }, signal?: AbortSignal): Promise<SwapQuote> {
+  const response = await apiFetch(`${API_URL}/v1/dex/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+  return readJson(response);
+}
+
 export async function getWalletBalance(): Promise<WalletBalance> {
   const response = await apiFetch(`${API_URL}/v1/wallet/balance`);
   return readJson(response);

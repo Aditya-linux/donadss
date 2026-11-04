@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "compile": "hardhat build",
-    "test": "hardhat test solidity"
+    "test": "hardhat test solidity",
+    "export:frontend": "node scripts/export-frontend-artifacts.mjs"
   },
   "devDependencies": {
     "hardhat": "^3.21.2"

@@ -20,12 +20,15 @@ import {
   getAiUsageSince,
   getRoutine,
   getTask,
+  getSwapQuote as loadSwapQuote,
+  completeSwapQuote,
   deletePushSubscription,
   listRoutines,
   listTasks,
   putProfile,
   putRoutine,
   putPushSubscription,
+  putSwapQuote,
   updateTask,
 } from "@/server/database";
 import { geminiConfigured } from "@/server/gemini";
@@ -181,6 +184,52 @@ async function confirmFlow(ownerId: string, id: string, request: Request): Promi
   return json(task);
 }
 
+async function minedTransaction(hash: string): Promise<{ transaction: Record<string, string>; receipt: Record<string, string> }> {
+  const [transaction, receipt] = await Promise.all([
+    monadRpc("eth_getTransactionByHash", [hash]) as Promise<Record<string, string> | null>,
+    monadRpc("eth_getTransactionReceipt", [hash]) as Promise<Record<string, string> | null>,
+  ]);
+  if (!transaction || !receipt?.blockNumber) throw new Error("Transaction has not been mined yet.");
+  if (receipt.status !== "0x1") throw new Error("Monad receipt reports a reverted transaction.");
+  return { transaction, receipt };
+}
+
+async function confirmSwap(ownerId: string, request: Request): Promise<Response> {
+  const payload = await body(request);
+  const quoteId = String(payload.quote_id ?? "");
+  const approvalHash = String(payload.approval_transaction_hash ?? "").toLowerCase();
+  const swapHash = String(payload.swap_transaction_hash ?? "").toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(quoteId) || !/^0x[0-9a-f]{64}$/.test(approvalHash) || !/^0x[0-9a-f]{64}$/.test(swapHash)) throw new Error("Valid quote, approval, and swap transaction identifiers are required.");
+  if (approvalHash === swapHash) throw new Error("Approval and swap must be separate transactions.");
+  const quote = await loadSwapQuote(ownerId, quoteId);
+  if (!quote) throw new Error("Swap quote not found.");
+  if (quote.execution) return json(quote);
+  if (quote.blocked) throw new Error(quote.blocked_reason ?? "Sentinel blocked this swap.");
+
+  const [{ transaction: approval }, { transaction: swap, receipt: swapReceipt }] = await Promise.all([
+    minedTransaction(approvalHash), minedTransaction(swapHash),
+  ]);
+  if (approval.from?.toLowerCase() !== ownerId || approval.to?.toLowerCase() !== quote.token_in.contract || BigInt(approval.value ?? "0x0") !== BigInt(0) || approval.input?.toLowerCase() !== quote.approval_calldata.toLowerCase()) throw new Error("Mined approval does not match the exact token, router, amount, or wallet policy.");
+  if (swap.from?.toLowerCase() !== ownerId || swap.to?.toLowerCase() !== quote.router || BigInt(swap.value ?? "0x0") !== BigInt(0) || swap.input?.toLowerCase() !== quote.swap_calldata.toLowerCase()) throw new Error("Mined swap does not match the exact router, recipient, amount, fee tier, or minimum-output policy.");
+  const block = await monadRpc("eth_getBlockByNumber", [swapReceipt.blockNumber, false]) as Record<string, string> | null;
+  if (!block?.timestamp || Number(BigInt(block.timestamp)) * 1_000 > quote.expires_at_ms) throw new Error("Swap was mined after its quote expired and cannot be certified.");
+
+  const [inputAfter, outputAfter] = await Promise.all([
+    readErc20Balance(quote.token_in.contract, ownerId),
+    readErc20Balance(quote.token_out.contract, ownerId),
+  ]);
+  const inputSpent = BigInt(quote.input_balance_before_atomic) - inputAfter;
+  const outputReceived = outputAfter - BigInt(quote.output_balance_before_atomic);
+  if (inputSpent !== BigInt(quote.token_in.amount_atomic)) throw new Error("Input-token balance delta does not match the quoted exact-input amount.");
+  if (outputReceived < BigInt(quote.token_out.minimum_amount_atomic)) throw new Error("Output-token balance delta is below the approved minimum output.");
+  quote.execution = {
+    approval_transaction_hash: approvalHash, swap_transaction_hash: swapHash,
+    block_number: Number(BigInt(swapReceipt.blockNumber)), output_amount_atomic: outputReceived.toString(), confirmed_at_ms: Date.now(),
+  };
+  await completeSwapQuote(ownerId, quote);
+  return json(quote);
+}
+
 async function operatorAction(ownerId: string, id: string, request: Request): Promise<Response> {
   const task = await ownedTask(ownerId, id) as OperatorCompletedTask;
   if (task.bot !== "operator" || task.status.state !== "completed") throw new Error("Operator task not found.");
@@ -285,12 +334,15 @@ async function route(request: Request, context: Context): Promise<Response> {
   }
   if (method === "POST" && segments.join("/") === "dex/quote") {
     const payload = await body(request);
-    return json(await quoteUniswapSwap({
+    const quote = await quoteUniswapSwap({
       tokenIn: String(payload.token_in ?? ""), tokenOut: String(payload.token_out ?? ""),
       amount: String(payload.amount ?? ""), recipient: ownerId,
       slippageBps: Number(payload.slippage_bps), maxPriceImpactBps: Number(payload.max_price_impact_bps),
-    }));
+    });
+    await putSwapQuote(ownerId, quote);
+    return json(quote);
   }
+  if (method === "POST" && segments.join("/") === "dex/confirm") return confirmSwap(ownerId, request);
   if (segments[0] === "tasks" && segments.length === 1 && method === "POST") return json(await createAndExecuteTask(ownerId, await body(request)), 201);
   if (segments[0] === "tasks" && segments.length === 1 && method === "GET") return json(await listTasks(ownerId, Math.min(100, Math.max(1, Number(new URL(request.url).searchParams.get("limit") ?? 20)))));
   if (segments[0] === "tasks" && segments.length === 2 && method === "GET") return json(await ownedTask(ownerId, segments[1]));

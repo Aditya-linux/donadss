@@ -2,210 +2,350 @@
 
 ![DONADS mascot](frontend/public/brand/donads-mascot-tile.png)
 
-**Decentralized On-chain Neural Agent Dispatch System** — a crypto-native agent workspace for Monad that turns a user goal into coordinated, permission-bounded work and reports completion only when the result can be verified.
+**Decentralized On-chain Neural Agent Dispatch System**
 
-## The problem
+DONADS is a crypto-native AI task execution system for Monad. A user describes an outcome in chat, DONADS coordinates the specialists required for the task, pauses at explicit approval boundaries, and reports completion only after independently verifiable evidence exists.
 
-General AI assistants can recommend actions, but recommendations are not completed tasks. Commerce, payments, research, campaigns, and long-running workflows need authenticated tools, durable state, explicit approval, recovery, and receipts. DONADS is building that execution layer without taking custody of a user's seed phrase or disguising a mock as a real result.
+- Live Testnet application: [donads.vercel.app](https://donads.vercel.app)
+- Network: Monad Testnet, chain ID `10143`
+- Status: Testnet product; Mainnet financial execution is intentionally disabled
 
-## Why DONADS instead of a general-purpose agent
+## What problem does DONADS solve?
 
-Grok Bot is currently the broader product: it provides persistent cloud computers, authenticated browsers, connected apps, parallel bots, learned routines, and background work. DONADS does not claim to outperform that general-purpose automation layer today.
+AI assistants are good at producing text, but a useful financial agent must do more than recommend an action. It must preserve state, coordinate tools, request consent, survive failures, verify external results and prove what happened.
 
-DONADS is purpose-built for crypto execution on Monad. Its differentiation is not another chatbot or a different mascot; it is an approval and verification system around agent work:
+Crypto workflows make this harder:
 
-- A wallet remains user-controlled, and a login signature can never authorize a payment.
-- Financial steps are represented as exact, reviewable intents instead of natural-language permission.
-- Sentinel and Flow validate chain, sender, recipient, asset, amount, calldata, and mined receipt outside the language model.
-- Commerce requires both verified on-chain payment and a real merchant order receipt before reporting completion.
-- Operator can coordinate specialists, but cannot inherit wallet-signing authority or silently move funds.
-- Task history, evidence, child-agent events, transaction receipts, and PDF reports create an auditable completion record.
-- The policy vault provides revocable session permissions with recipient, per-transaction, daily, expiry, replay, pause, owner-withdrawal, and exact owner-authorized action controls on Monad Testnet.
+- Natural language is ambiguous, while transactions must be exact.
+- A model must never receive a seed phrase or unrestricted signing authority.
+- A transaction hash alone does not prove the intended outcome occurred.
+- Long-running tasks need recovery, history and cross-device approvals.
+- Research and websites can contain phishing, prompt injection or manipulated evidence.
+- Payments, swaps, escrows and purchases require different proofs of completion.
 
-The product thesis is focused: use a general agent for broad browser and office work; use DONADS when a Monad task needs constrained authority, explicit wallet consent, deterministic validation, and cryptographic proof of completion. The immediate goal is to make that focused path excellent before expanding into a general cloud-computer platform.
+Most assistants stop at an answer. DONADS is designed to continue from **request -> plan -> deterministic validation -> user approval -> execution -> independent verification -> receipt**.
 
-## Product vision
+## The solution
 
-DONADS uses one minimal, playful task surface with the DONADS mascot while remaining crypto-first and Monad-native. Users do not open separate bot pages: they state a goal once, deterministic routing selects the required specialists, Operator coordinates dependent work, the loading interface names the active stage, and the conversation preserves results and evidence. The specialist catalog is informational and explains each capability and what to ask.
+DONADS provides one chat workspace backed by six coordinated specialists. The language model can help interpret, plan and summarize, but it cannot authorize or sign financial actions.
 
-The target platform includes persistent cloud workers, authenticated browsers, connected applications, cross-bot coordination, learned routines, and long-running background work. Those are target capabilities, not claims about the current build. No measured benchmark currently proves DONADS faster or better than Grok Bot.
+```text
+User goal
+   |
+   v
+Operator selects the required specialists
+   |
+   +--> Scout gathers source-linked evidence
+   +--> Sentinel checks threats and financial policy
+   +--> Growth produces evidence-based communication
+   +--> Commerce validates merchant and order state
+   +--> Flow prepares deterministic on-chain actions
+   |
+   v
+Exact checkpoint shown to the user
+   |
+   v
+User-controlled wallet approves or rejects
+   |
+   v
+DONADS verifies the mined receipt and resulting state
+```
 
-## Non-negotiable rules
+The system separates three kinds of authority:
 
-- Crypto only: no Razorpay, fiat checkout, KYC integration, or gift-card workaround.
-- Never request, transmit, or persist seed phrases or raw private keys.
-- A wallet login signature authorizes a session only; it never authorizes a payment.
-- Every payment or purchase requires a separate, exact, immediately visible confirmation.
-- Unsupported merchants and unverifiable results fail closed.
-- A transaction hash is not an order. A purchase completes only with verified chain payment and a real merchant order receipt.
-- Mainnet remains disabled until testnet acceptance, security review, recovery tests, and contract audit pass.
+1. **AI authority:** planning, routing, summarization and drafting.
+2. **Policy authority:** deterministic checks for network, sender, recipient, asset, amount, calldata, limits and evidence.
+3. **Wallet authority:** the user or a separately reviewed restricted session signer authorizes the final transaction.
 
-## Specialists available today
+An LLM response is never treated as financial authorization.
 
-| Specialist | Working end to end in this repository | Remaining production capability |
-| --- | --- | --- |
-| Scout | Fetches up to five user-supplied public URLs, blocks private-network targets, extracts evidence, and returns citations | Search provider, authenticated browser, broader live discovery |
-| Commerce | Validates source-linked crypto offers and enforces offer → exact approval → invoice → confirmed payment → verified order-receipt state transitions | First authorized physical-product merchant adapter, authenticated checkout, shipping/refund recovery |
-| Growth | Produces deterministic campaign drafts from a versioned brand profile and cited evidence | Model-backed iteration and approved publishing connectors with message receipts |
-| Flow | Routes exact native MON and ERC-20 transfers; deploys owner-controlled policy vaults; configures/revokes bounded sessions; creates funded P2P escrows; and implements guarded Uniswap approval, swap, and receipt verification | Official live testnet DEX bytecode, saved contract-action history, replacement/dropped-transaction recovery |
-| Operator | Validates dependency graphs, runs independent specialists in parallel, persists child tasks, supports cancel/retry, and captures versioned routines | Durable distributed queue, schedules/triggers, isolated cloud workers |
-| Sentinel | Runs preflight phishing/scam checks before task execution, triages bytecode, detects dangerous token/NFT approvals, and enforces Flow network, sender, recipient, asset, and amount policy checks | Live reputation feeds, downloaded-file malware scanning, deployed-vault state, broader merchant/domain policy |
+## Core use cases
 
-Six specialists exist. The planned ten-bot catalog is intentionally incomplete: a new bot will only be specified and built after explicit product-owner approval.
+- Send native MON or an ERC-20 token through chat after reviewing the exact intent.
+- Pay multiple MON recipients while verifying every individual receipt.
+- Display Monad Testnet MON and verified token balances.
+- Prepare a guarded token swap with minimum output, slippage and price-impact limits.
+- Deploy an owner-controlled policy vault and configure expiring, revocable permissions.
+- Create, release, refund, dispute and resolve P2P escrow contracts.
+- Screen escrow deliverables, store source hashes and prepare an exact release or dispute checkpoint.
+- Research supplied public sources with citations, retrieval timestamps and content hashes.
+- Detect phishing, dangerous approvals, malicious bytecode patterns and indirect prompt injection.
+- Coordinate research, security, growth and financial steps as one persistent Mission.
+- Restore wallet-scoped task history and continue interrupted work.
+- Receive mobile Web Push or Telegram notifications when a task needs review.
+- Export substantial results as structured PDF reports; ordinary questions remain readable chat responses.
 
-## Current completion standard
+## Who is DONADS for?
 
-A Monad transfer is complete only when the configured RPC proves it is on the expected chain, the user approves the exact intent in their wallet, and DONADS verifies the successful mined receipt, sender, recipient, amount, block, and absence of calldata.
+### Individual crypto users
 
-ERC-20 chat commands use the explicit form `Send 10 USDC token 0xTOKEN_CONTRACT to 0xRECIPIENT`. Flow reads the contract code, symbol, decimals, and balances from Monad Testnet; rejects symbol, precision, or balance mismatches; builds the standard `transfer(address,uint256)` calldata; and requires the mined transaction plus exact recipient balance delta to match before completion. The balance control shows live MON plus every verified token contract present in that wallet's DONADS history.
+Users who want to transact, inspect risk, research protocols or manage repeated on-chain work from a conversational interface without giving an AI their private key.
 
-The Uniswap v3 adapter uses the Monad Testnet QuoterV2 and SwapRouter02 addresses from Uniswap's official deployment feed. The explicit chat form is `Swap 1 USDC token 0xINPUT for DAI token 0xOUTPUT max 0.5% slippage`. Quotes are persisted with a ten-minute expiry and pre-swap balances. After an accepted quote, the wallet approves only the exact input, submits exact router calldata, and the server certifies both receipts, sender, token, router, calldata, quote block time, input delta, and minimum output. On 2026-11-03 the official Monad Testnet RPC still returned zero bytecode for the listed QuoterV2, SwapRouter02, and Universal Router, so this execution path remains correctly fail-closed until those official deployments actually exist.
+### DAO and community operators
 
-P2P escrow is available through `Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed`. The connected buyer wallet deploys and funds a dedicated contract. Its full lifecycle is chat-native through `Release escrow 0xESCROW`, `Cooperative refund escrow 0xESCROW`, `Timeout refund escrow 0xESCROW`, `Dispute escrow 0xESCROW evidence ...`, and `Resolve escrow 0xESCROW to seller|buyer resolution ...`. The contract enforces the caller's buyer, seller, or arbiter role and emits on-chain receipts for every state transition.
+Teams coordinating contributor payments, research, campaign preparation, milestone escrows and evidence-backed approvals.
 
-Deliverables can be screened before escrow action with `Verify escrow 0xESCROW with deliverable https://...`. Sentinel first blocks unsafe URLs, Scout retrieves only public text and records its SHA-256 hash and retrieval time, then Sentinel quarantines indirect prompt injection before any model sees the content. DONADS reads the Testnet escrow bytecode, state, parties, terms hash and funded amount; it prepares either exact release calldata for screened evidence or an evidence-hashed dispute for a blocked/unreachable source. Screening proves what DONADS fetched and inspected, not that a seller fulfilled the agreement, so the buyer must still judge the evidence and explicitly approve any release. DONADS persists completion only after the mined receipt matches the screened action.
+### Crypto-native freelancers and merchants
 
-Restricted session permissions are wallet-driven. `Deploy my policy vault` deploys a vault owned by the connected user. A session address held in an external wallet or secure signer can then be bounded with `Allow session 0xSESSION on vault 0xVAULT to send up to 0.1 MON per transaction and 1 MON per day for 24 hours to 0xRECIPIENT`, or immediately disabled with `Revoke session 0xSESSION on vault 0xVAULT`. Delegated native execution additionally requires an owner-authorized action bound to the chain, vault, session, recipient, amount, Mission identifier, nonce, and expiry. DONADS never creates, receives, or stores the session private key.
+Buyers and sellers who need milestone terms, P2P escrow, dispute evidence and verifiable payment records.
 
-The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for testing`. Financial values bypass the language model and are parsed deterministically. Flow then exposes the exact intent in the conversation. Its lifecycle is `awaiting approval → authorized → submitted → confirmed`; the submitted transaction hash is checkpointed server-side and temporarily retained in the originating browser so a refresh, slow receipt, or interrupted API call resumes verification instead of broadcasting a duplicate payment.
+### DeFi users and protocol teams
 
-A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
+Users who need explainable transaction preparation, deterministic policy controls, simulation and proof-of-completion records.
 
-### Cross-device action checkpoints
+### Developers and operations teams
 
-After signing in with the same wallet on a phone, DONADS restores that wallet's task history and shows an **Action needed** inbox. The inbox is derived from persisted workflow state, so phone and desktop cannot disagree about whether a task is actually paused. It currently covers Flow intent review, wallet signing, receipt verification, Commerce intent review, and planned Operator runs.
+Teams building automated Monad workflows that require durable Missions, typed transaction intents, wallet-scoped history and auditable receipts.
 
-The inbox refreshes while the app is visible and marks an existing checkpoint as waiting after two minutes. Time alone never creates an approval and never grants authority. Opening a financial checkpoint reveals the exact task; the connected mobile wallet must still display and sign the final transaction.
+## Market position
 
-Opt-in Web Push is implemented for browsers that support service workers and Push API. It stores wallet-owned subscriptions, removes expired endpoints, and sends privacy-minimized checkpoint alerts that never expose amounts or addresses on the lock screen. It remains visibly disabled until `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` are configured in Vercel. On iOS, the user must install DONADS to the Home Screen before Web Push is available.
+DONADS sits at the intersection of:
 
-## Frozen testnet delivery sequence
+- AI agents and task automation;
+- non-custodial wallets and smart accounts;
+- DeFi execution and transaction simulation;
+- crypto payments and merchant automation;
+- P2P escrow and milestone coordination;
+- security screening and verifiable agent activity.
 
-The approved product scope will be implemented in this order without adding a new specialist:
+The initial market is Monad users and teams that need safer conversational execution. The architecture can later support additional EVM networks, but Monad remains the first network and product focus.
 
-1. ERC-20 transfers through chat, including exact token contract, recipient, amount, simulation, wallet signature, and receipt/balance verification.
-2. Native MON and allowlisted token balances with chain and freshness labels.
-3. One allowlisted Monad Testnet DEX adapter.
-4. Deterministic swap quote, minimum output, slippage and price-impact policy, simulation, explicit wallet signing, and receipt verification.
-5. P2P escrow with fund, release, refund/timeout, and milestone receipts.
-6. Scout evidence records containing source URL, retrieval time, extracted evidence, and content hash.
-7. One authorized physical-product merchant integration that returns both payment and order receipts.
-8. Restricted, expiring, revocable session-wallet permissions backed by the policy vault.
+DONADS does not claim a market-size figure or Mainnet readiness without independent evidence.
 
-Every financial workflow must also support simulation mode, explainable Sentinel blocking, and a proof-of-completion record containing the workflow steps, approvals, evidence, transaction hashes, balance changes, and final status. The security audit remains a mandatory mainnet gate but is intentionally deferred while the testnet feature pipeline is completed.
+## Why use DONADS instead of a general-purpose agent?
 
-Flow also supports reviewed native-MON batches of up to ten unique recipients. The user must explicitly state that the amount is per recipient. DONADS checks the remaining value plus estimated gas before the first signature, records each submission independently, resumes safely after interruption, and completes the batch only after every receipt matches its approved recipient and amount. ERC-20 batches remain disabled until equivalent per-recipient balance-delta verification is implemented.
+General-purpose products such as Grok Bot have broader cloud-computer, browser and connected-app capabilities today. DONADS is intentionally more specialized.
 
-### Final manual acceptance suite
+DONADS focuses on crypto workflows where correctness and authority boundaries matter:
 
-The feature set is not called complete until a user can run and preserve evidence for at least these testnet cases:
+- The wallet remains non-custodial.
+- Login signatures cannot authorize payments.
+- Financial language is converted into typed, reviewable intents.
+- Financial values bypass generative model output and use deterministic parsing.
+- Sentinel and Flow verify transaction policy outside the model.
+- Exact calldata and expected balance changes are shown before signing.
+- Mined transactions are checked against the approved sender, target, amount and calldata.
+- Escrow, merchant and research workflows preserve evidence, not only prose.
+- Unsupported or unverifiable actions fail closed instead of returning simulated success.
 
-1. Confirm a native MON chat transfer.
-2. Reject a native MON intent without broadcasting.
-3. Resume a submitted transfer after refresh without duplicate broadcast.
-4. Confirm an ERC-20 chat transfer and exact balance delta.
-5. Simulate a swap without broadcasting.
-6. Confirm an allowlisted DEX swap within minimum-output policy.
-7. Block a swap whose slippage or price impact exceeds policy, with a precise reason.
-8. Fund and release or refund a P2P escrow.
-9. Produce source-hashed Scout research that drives a later workflow.
-10. Open a paused checkpoint on a phone and finish it with the same wallet.
-11. Complete a real crypto merchant order with both chain and merchant receipts.
-12. Grant, exercise, revoke, and prove expiry of a restricted session permission.
+The long-term advantage is **policy-controlled, verifiable crypto autonomy**, not a chatbot with a wallet attached.
 
-Each case needs an automated test where practical and a saved manual receipt. A feature is not complete when only its UI, intent, mock, or transaction hash exists.
+## Specialists
 
-## Wallet and payment model
+Users submit one goal; they do not need to operate separate bot pages.
 
-DONADS agents do **not** currently own wallets, private keys, or independent funds. Wallet sign-in proves task ownership but cannot move money. For a payment, Flow creates an exact intent containing the Monad network, payer, recipient, asset, and amount. Sentinel validates that intent, the browser wallet shows the final transaction for explicit user approval, and the wallet signs and broadcasts it. DONADS then reads the transaction from Monad RPC and records completion only after the receipt and exact values match.
+| Specialist | Responsibility | Working today | Important remaining work |
+| --- | --- | --- | --- |
+| **Scout** | Public-source research and evidence | Supplied URL retrieval, citations, content hashes, retrieval time and injection quarantine | Hardened outbound egress, search provider and authenticated browser worker |
+| **Commerce** | Crypto-native purchasing | Offer and purchase-intent validation with payment/order completion rules | First authorized physical-product merchant connector and refund recovery |
+| **Growth** | Evidence-based campaign drafting | Deterministic drafts and optional model enhancement | Approved publishing connectors and delivery receipts |
+| **Flow** | Payments and Monad execution | Native MON, ERC-20, batches, balances, policy vault, escrow and guarded swap path | Live approved DEX deployment, full transaction-replacement recovery and secure session signer |
+| **Operator** | Cross-specialist coordination | Dependency graphs, parallel waves, child tasks, retry/cancel and durable Mission state | Distributed schedules, triggers and isolated cloud workers |
+| **Sentinel** | Security and policy enforcement | URL preflight, prompt-injection detection, bytecode triage, approval checks and transaction policy | Reputation feeds, malicious-file scanning and hardened browser isolation |
 
-Operator can coordinate Flow or Commerce, but it cannot sign on their behalf. Its permission model explicitly disables signing and fund movement. A user can now deploy a policy vault from chat and delegate a separately secured session address with recipient, per-transaction, daily, expiry, pause, and replay limits. The user remains owner and can revoke the session at any time. DONADS does not host session private keys; production autonomous execution still requires an approved KMS or wallet signer and the deferred security audit.
+No additional specialist is added without an explicit product decision and acceptance criteria.
 
-Chat-directed swap execution is fully wired behind a live-code guard. It remains unavailable while the official testnet router addresses contain no bytecode. Autonomous session-key signing remains disabled until a secure signer is selected; contract permissions alone never expose or custody a private key.
+## What works today?
 
-Commerce adds merchant evidence around the payment: verified offer → exact user approval → merchant invoice → wallet payment → Monad receipt → merchant order receipt. Without both the chain receipt and merchant order receipt, the product remains unordered.
+### Wallet and authentication
 
-## Security and multi-user model
+- Reown/WalletConnect QR flow and injected EVM wallet support.
+- Monad Testnet is the required WalletConnect chain.
+- Wallet sign-in uses a short-lived, single-use challenge and cannot move funds.
+- Sessions are stored in an `HttpOnly`, `SameSite=Lax` cookie and restored after refresh.
+- Wallet-scoped task history is persisted in Postgres.
 
-- Wallet sign-in uses an EIP-4361-shaped, Monad-chain-bound challenge and EIP-191 signature recovery.
-- Challenges expire after five minutes and are single-use; sessions expire after twelve hours.
-- Session tokens are stored server-side and restored through a 12-hour `HttpOnly`, `SameSite=Lax` cookie; they are never stored in local storage. Refreshing the page restores the authenticated wallet until expiry or explicit sign-out.
-- Tasks, events, feedback, profiles, routines, payment actions, and orchestration actions are isolated by normalized wallet address.
-- Wallet-scoped task history is available through `GET /v1/tasks`; selecting a history item reconstructs its request and verified result in the conversation surface.
-- Sign-in challenges and authenticated sessions are rate limited; API responses include restrictive security headers.
-- Operator child tasks inherit the parent owner; cross-wallet identifiers return `404` without revealing existence.
-- The browser calls a same-origin `/api/v1` API, eliminating cross-origin deployment configuration. Monad chain ID and exact transfer values are revalidated inside transaction confirmation.
+### Financial execution
 
-The Vercel deployment stores challenges, sessions, tasks, profiles, routines, and rate limits in Postgres. Operator runs through Vercel Workflows so execution can resume across function restarts and deployments.
+- Native MON transfers and batches of up to ten unique recipients.
+- ERC-20 transfers with contract code, metadata, precision, balance and receipt-delta verification.
+- Exact wallet approval followed by independent mined-receipt verification.
+- Policy-vault deployment and restricted-session policy configuration.
+- P2P escrow lifecycle: create, release, cooperative refund, timeout refund, dispute and arbiter resolution.
+- Swap quoting/execution code that fails closed when the approved router is unavailable.
+- MonadScan links for confirmed transactions.
+
+### Evidence and security
+
+- Scout source URL, retrieval time, citation and SHA-256 content hash.
+- Deterministic prompt-injection and transaction-hijack screening before model summarization.
+- Escrow runtime-bytecode identity verification with Solidity immutable fields normalized.
+- Human intent versus deterministic calldata panels before financial approval.
+- Exact receipt verification before a task can be marked complete.
+
+### Product experience
+
+- One chat-native Mission workspace.
+- Persistent, uniquely named wallet-scoped history with deletion controls.
+- File and image attachment interface with enforced size/count limits.
+- Mobile-responsive approval inbox and Web Push support.
+- Telegram checkpoint connector when server-side configuration is complete.
+- Structured PDF export for substantial reports.
+
+## Website screenshots and previews in chat
+
+This capability is **planned, not currently implemented**.
+
+DONADS can support visual website evidence through an isolated browser worker:
+
+1. Open an allowlisted public or user-authorized page in an isolated browser session.
+2. Record the final URL, redirect chain, retrieval time, viewport and browser-worker version.
+3. Run Sentinel checks on the URL, DOM and extracted text.
+4. Capture a screenshot and compute its SHA-256 hash.
+5. Store the image in private object storage under the wallet-owned Mission.
+6. Render a short-lived signed preview directly inside chat.
+7. Preserve the screenshot hash and relevant source evidence in the Mission report.
+
+For authenticated websites, credentials and cookies must remain inside an encrypted, isolated browser session. They must never be exposed to the model, chat output, logs or screenshots.
+
+Screenshots are evidence of what the browser displayed at a particular time; they are not proof that every claim on the page is true. OCR and vision-model output must be labelled as extracted interpretation, and financial actions must continue through deterministic validation and explicit approval.
+
+Telegram should receive a privacy-safe status message and **Review in DONADS** deep link by default. Sending screenshots directly to Telegram should require explicit user opt-in, redaction and a sensitivity check.
+
+## Telegram integration
+
+Telegram is implemented as a mobile checkpoint channel, not a signing surface.
+
+It can:
+
+- link one private Telegram chat to a wallet-owned DONADS account;
+- notify the user that a Mission requires attention;
+- include a short checkpoint summary;
+- open the exact task through a **Review in DONADS** button.
+
+It cannot:
+
+- approve or sign a transaction;
+- receive a seed phrase or private key;
+- silently execute a financial action;
+- expose transaction details on the lock screen by default.
+
+Required server configuration:
+
+```text
+TELEGRAM_BOT_TOKEN
+TELEGRAM_BOT_USERNAME
+TELEGRAM_WEBHOOK_SECRET
+DONADS_PUBLIC_APP_URL
+```
+
+The webhook uses Telegram's secret token, link codes are hashed, single-use and expire after ten minutes, duplicate update IDs are rejected, and each chat is rate limited. Full activation steps are in [docs/connected-apps.md](docs/connected-apps.md).
+
+## Wallet and custody model
+
+DONADS specialists do not own unrestricted wallets.
+
+- A user-controlled wallet signs ordinary transactions.
+- DONADS never requests or stores the user's seed phrase or private key.
+- Operator can coordinate Flow but cannot inherit signing permission.
+- A policy vault can restrict a separate session address by recipient, amount, daily limit and expiry.
+- DONADS does not currently host a session private key.
+- Production automation requires a reviewed smart-account/session design and a secure signer such as KMS/HSM infrastructure.
+
+Every payment remains separate from wallet login and must be independently authorized or covered by a previously reviewed, revocable policy.
+
+## Completion rules
+
+DONADS reports completion only when the requested outcome has matching evidence.
+
+| Workflow | Completion evidence |
+| --- | --- |
+| Native MON transfer | Successful mined receipt with exact chain, sender, recipient, value and empty calldata |
+| ERC-20 transfer | Successful receipt plus exact token calldata and recipient balance delta |
+| Batch payment | Every individual recipient receipt verified; partial batches remain incomplete |
+| Swap | Approved router/calldata, successful approval and swap receipts, input delta and minimum output |
+| Escrow action | Verified DONADS runtime, correct role/state, exact action calldata and successful receipt |
+| Research | Supplied source URLs, retrieval timestamps, citations, hashes and limitations |
+| Product order | Merchant invoice, verified on-chain payment and merchant order receipt |
+
+A transaction hash is not an order receipt. A screenshot is not contractual fulfillment. A model response is not authorization.
 
 ## Architecture
 
-- `frontend/`: the single Vercel project containing the Next.js interface and same-origin API.
-- `frontend/src/server/`: Postgres persistence, EIP-191 authentication, specialist execution, policy checks, rate limits, and Monad receipt verification.
-- `frontend/src/workflows/`: durable Vercel Operator workflows and parallel dependency waves.
-- `crates/`: the tested Rust reference implementation and local conformance/acceptance runner.
-- `contracts/`: policy-vault contract and Solidity tests.
+```text
+Next.js interface and same-origin API (Vercel)
+   |
+   +-- Wallet authentication and approval checkpoints
+   +-- Specialist execution and deterministic policy checks
+   +-- Vercel Workflows for durable Operator runs
+   +-- Postgres for sessions, Missions, events, history and rate limits
+   +-- Monad RPC for state and independent receipt verification
+   +-- Gemini gateway for bounded planning/summarization
+```
 
-Operator executes dependency waves in parallel. Saved routines create a fresh reviewable run; they never reuse a signature or silently repeat a purchase.
+Repository layout:
 
-Every asynchronous workflow uses the DONADS canvas loader from the approved process design. Its status text changes with the real operation, animation stops when the operation ends, and reduced-motion users receive a stable idle pose.
+- `frontend/` - Next.js interface, API routes and deployment root.
+- `frontend/src/server/` - authentication, persistence, specialists, policy, AI gateway and receipt verification.
+- `frontend/src/workflows/` - durable Operator workflows.
+- `contracts/` - policy vault and escrow contracts plus tests.
+- `crates/` - Rust reference implementation and conformance tools.
+- `docs/` - architecture decisions, acceptance evidence and launch runbooks.
 
-Completed specialist results can be exported as structured PDF reports. Reports are generated locally in the browser, require no PDF service or API key, include task metadata, request fields, structured results, activity evidence, timestamps, and page numbers, and omit fields whose names indicate tokens, signatures, secrets, seed phrases, or private keys.
+## AI model policy
 
-Every newly accepted task now creates a normalized, versioned Mission with an append-only event timeline, a specialist step and an execution attempt. Flow Missions additionally persist typed transaction intents, approval evidence, wallet submission state, and independently verified receipts. The original task API remains compatible while the Mission API provides the durable audit model at `GET /api/v1/missions`.
+Gemini is used only when configured and useful. Missing quota, provider failure or timeout falls back to deterministic specialists.
 
-Unfinished connector placeholders are not exposed in the product. Telegram appears in the Action needed panel only after its bot, username, signed webhook secret and public app URL are configured server-side. It delivers status and approval deep-links but cannot approve or sign transactions. Other OAuth connectors remain fail-closed until encrypted token storage, callback state/PKCE, webhook authenticity and disconnect tests are complete. Mainnet readiness remains an authenticated evidence endpoint and cannot enable execution.
-
-Architecture and release evidence:
-
-- [`docs/architecture/current-state.md`](docs/architecture/current-state.md)
-- [`docs/architecture/decisions.md`](docs/architecture/decisions.md)
-- [`docs/acceptance-matrix.md`](docs/acceptance-matrix.md)
-- [`docs/connected-apps.md`](docs/connected-apps.md)
-- [`docs/mainnet-runbook.md`](docs/mainnet-runbook.md)
-
-## Credentials and service requirements
-
-The current local/testnet build requires **no paid API key**. It uses the public Monad Testnet RPC, the user's wallet, deterministic specialists, and local browser PDF generation. A free public Reown project ID enables the WalletConnect wallet chooser and QR modal; it is client configuration, not a secret.
-
-| Capability | Required now | Production requirement |
-| --- | --- | --- |
-| Monad reads and receipt verification | Public `MONAD_RPC_URL`; no key | Dedicated authenticated Monad RPC endpoint with quotas and failover |
-| Wallet authentication and payments | User-controlled EVM wallet plus public `NEXT_PUBLIC_REOWN_PROJECT_ID` | Same non-custodial model, plus audited policy-vault address for bounded automation |
-| PDF reports | No key | No key unless reports are later archived to external storage |
-| Public web deployment | One Vercel project and a Marketplace Postgres integration | Deployment/database credentials are injected by Vercel and never committed |
-| Real product orders | Not configured | Documented crypto merchant API URL/token and webhook verification secret |
-| Model-backed generation | Not configured | One approved LLM provider key, budgets, redaction, fallback, and evaluation suite |
-| Web-wide search | Not configured; Scout reads supplied URLs | Approved search API key plus citation and source-quality controls |
-| Connected applications | Not configured | Per-connector OAuth client ID/secret and encrypted, revocable user tokens |
-| Multi-instance durability | Marketplace Postgres and Vercel Workflows | Retention, backups, connection quotas, and disaster-recovery testing |
-| Monitoring | Local logs | Error-monitoring DSN, metrics, alerting, and privacy-safe audit retention |
-
-Do not add unused provider secrets. Select a provider only when its connector is implemented and tested; use separate testnet and production credentials with the minimum permissions.
-
-### Approved free-user AI policy
-
-The model gateway is not active until an approved provider key is configured. When activated, these limits are mandatory and shared by every provider adapter:
+Free-user limits:
 
 - 3 model requests per minute per wallet.
 - 30 model requests per UTC day per wallet.
 - 1 running model request per wallet.
-- 5 attachments per task, at most 10 MB each.
-- 20,000 input tokens and 2,000 output tokens per task.
-- 30-second provider timeout.
-- 1 retry only for transient failures.
-- No retry for invalid input or provider HTTP `429` responses.
-- Deterministic specialist fallback when model quota or availability prevents inference.
+- 5 files per task, maximum 10 MB each.
+- 20,000 maximum input tokens and 2,000 maximum output tokens.
+- 30-second timeout.
+- 1 retry for transient failures.
+- No retry for invalid input or provider `429` responses.
 
-The canonical values live in `frontend/src/lib/ai-policy.ts`. Server-side database leases and wallet-scoped counters enforce concurrency and request quotas; browser checks are usability aids, not the security boundary.
+Sentinel, Commerce financial validation, Flow policy, calldata construction, wallet signing and receipt verification remain outside model authority.
 
-The Gemini gateway is provider-ready and remains disabled while `GEMINI_API_KEY` is empty. `GEMINI_MODEL` defaults to the stable `gemini-2.5-flash` identifier and can be changed without altering specialist code. When configured, Gemini produces schema-constrained routing, cited Scout summaries, Growth draft improvements, and image/PDF understanding. Missing keys, exhausted quota, timeouts, and provider failures fall back to the deterministic specialists. Sentinel, Flow, Commerce policy, transaction validation, and all signing remain outside model authority.
+## Security principles
 
-Sentinel screens every signed chat request before model planning or wallet activity. It fails closed on deterministic high-risk signals such as credential-hiding URLs, protected-brand lookalikes, punycode/IP/shortened destinations, executable downloads, seed/private-key social engineering, unlimited ERC-20 approvals, and NFT `setApprovalForAll`. A clean deterministic result is not a guarantee of safety; live reputation, malware scanning, and contract simulation remain separate integrations.
+- Never request, transmit or persist seed phrases or raw private keys.
+- Treat websites, attachments, screenshots and model output as untrusted input.
+- Keep secrets server-side and out of browser bundles.
+- Require ownership checks for every wallet-scoped task and connector.
+- Use exact typed intents and idempotent execution.
+- Fail closed for unsupported contracts, routers, merchants and unverifiable outcomes.
+- Preserve an append-only Mission timeline and proof-of-completion record.
+- Keep Mainnet disabled until every readiness gate has evidence.
 
-## Local setup
+Known security work before Mainnet includes hardened outbound web retrieval resistant to DNS rebinding, independent smart-contract review, application penetration testing and secure session-signer infrastructure.
 
-Requirements: Node.js, npm, a Postgres connection string, and a free Reown project ID. WalletConnect supports mobile/QR wallets; an injected EVM browser wallet is the fallback when Reown is not configured. Rust is optional unless running the reference implementation tests.
+## Mainnet status
+
+Mainnet execution cannot be enabled from the interface. It requires evidence for all launch gates, including:
+
+- ten or more independently verified Testnet receipts;
+- successful native, ERC-20, vault, escrow and swap workflows;
+- contract fuzz/invariant tests and independent contract review;
+- application penetration and adversarial AI/file testing;
+- two reliable Mainnet RPC providers with health-based failover;
+- secure session signer or reviewed smart-account infrastructure;
+- reorg, nonce, replacement and dropped-transaction recovery;
+- multisig administration, pause/revocation and emergency drills;
+- approved contract, token, merchant and DEX allowlists;
+- backups, recovery drills, monitoring and incident response;
+- limited-wallet beta and evidence-backed go/no-go review.
+
+See [docs/mainnet-runbook.md](docs/mainnet-runbook.md).
+
+## Required services
+
+| Capability | Development/Testnet | Production requirement |
+| --- | --- | --- |
+| Database | Postgres/Neon | Backups, retention and recovery drills |
+| Wallet connection | Reown project ID or injected wallet | Same non-custodial design |
+| Monad RPC | Public Testnet RPC | Multiple authenticated providers with failover |
+| AI enhancement | Optional Gemini key | Budgeting, monitoring and evaluation |
+| Telegram | Optional bot configuration | Secret webhook, monitoring and support procedure |
+| Web Push | Optional VAPID key pair | Delivery monitoring and privacy policy |
+| Browser screenshots | Not implemented | Isolated workers, private object storage and signed previews |
+| Product purchasing | Not configured | Authorized crypto merchant API, webhook and refund flow |
+
+## Local development
+
+Requirements: Node.js, npm, Postgres and a Reown project ID. Rust is optional unless running the reference workspace.
 
 ```powershell
 Set-Location frontend
@@ -214,22 +354,14 @@ npm install
 npm run dev
 ```
 
-Set `DATABASE_URL` and `NEXT_PUBLIC_REOWN_PROJECT_ID` in `frontend/.env.local`, open `http://localhost:3000`, select **Connect wallet**, and approve the message signature. The wallet chooser supports WalletConnect QR sessions. This signature is free and cannot move funds. The UI and API share the same local origin.
+Configure at minimum:
 
-Configuration is documented in `.env.example`. Production credentials must use a secret manager/KMS reference; never commit wallet keys, browser profiles, OAuth tokens, or merchant credentials.
+```text
+DATABASE_URL
+NEXT_PUBLIC_REOWN_PROJECT_ID
+```
 
-## Public testnet deployment
-
-DONADS deploys as one Vercel project rooted at `frontend/`:
-
-- `/` serves the Next.js product interface.
-- `/api/v1/*` serves authentication, tasks, history, profiles, payments, receipts, and specialist APIs.
-- `/.well-known/workflow/*` is managed by Vercel for durable Operator execution.
-- A Neon or equivalent Postgres integration is provisioned from the Vercel Marketplace and injects `DATABASE_URL`.
-- `MONAD_RPC_URL` defaults to the public Monad Testnet endpoint; production should use a dedicated authenticated endpoint.
-- `GET /api/v1/health` is the deployment health check. No private key is configured anywhere.
-
-To test a real transfer, connect a dedicated user-controlled wallet, select Monad Testnet (chain ID `10143`), fund that wallet with test MON from the official faucet, and submit a Flow task. The wallet address displayed by DONADS is the address to fund. There is no DONADS custody address and no agent private key.
+Optional services are documented in `frontend/.env.example`. Never commit `.env` files, private keys, OAuth tokens, merchant credentials or authenticated browser profiles.
 
 ## Verification
 
@@ -245,30 +377,42 @@ npm run build
 Set-Location ../contracts
 npm run compile
 npm test
-npm audit
+npm audit --audit-level=high
 ```
 
-Unit-test doubles exist only inside tests. They validate failures and UI behavior and never create product-visible payment or order claims.
+Product-visible workflows do not use mock payment or order success. Test doubles exist only inside automated tests.
 
-### Rust reference acceptance flow
+## Example prompts
 
-With the optional Rust dispatcher running, execute:
+```text
+Research https://monad.xyz and summarize the key facts with citations.
 
-```powershell
-cargo run -p donads-dispatch --example acceptance
+Send 0.01 MON to 0xRECIPIENT for testing.
+
+Send 0.01 MON each to 0xA, 0xB and 0xC.
+
+Send 10 USDC token 0xTOKEN_CONTRACT to 0xRECIPIENT.
+
+Deploy my policy vault.
+
+Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed.
+
+Verify escrow 0xESCROW with deliverable https://example.com/deliverable.
+
+Scan this EVM bytecode and explain every deterministic security signal: 0x326000f46000f2ff
 ```
 
-This generates an unfunded ephemeral wallet in memory, signs into the real API, completes a Sentinel bytecode task, verifies wallet-scoped history, logs out, and confirms the revoked session receives `401`. The key is never printed or persisted, and the flow never signs a transaction.
+Use real Testnet addresses. DONADS intentionally rejects placeholders such as `0xRECIPIENT` until they are replaced with valid 42-character EVM addresses.
 
-## Path to the first real product order
+## Project documentation
 
-1. Use `Deploy my policy vault` with a funded test wallet, then record its verified address; never share either owner or session private keys.
-2. Add dropped, replaced, reverted, duplicate, and delayed transaction recovery.
-3. Integrate one authorized merchant that sells physical products and directly accepts supported crypto through a documented checkout API.
-4. Bind merchant invoice, wallet payment, fulfillment, order receipt, refund, and support status into one idempotent workflow.
-5. Add production monitoring, database backups, browser isolation, and encrypted connector credentials.
-6. Load-test Postgres connection quotas, Workflow retries, concurrent users, and RPC failover.
-7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
-8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
+- [Current architecture](docs/architecture/current-state.md)
+- [Architecture decisions](docs/architecture/decisions.md)
+- [Acceptance matrix](docs/acceptance-matrix.md)
+- [Connected applications](docs/connected-apps.md)
+- [Mainnet runbook](docs/mainnet-runbook.md)
+- [Navigator/browser proposal](docs/NAVIGATOR_PHASE_5_PROPOSAL.md)
 
-The remaining external testnet gates are a live official DEX deployment, user-approved funding/deployment transactions, and an externally secured session signer. The merchant connector remains seventh in the frozen delivery sequence and extends Commerce; it does not add a new bot.
+## Product principle
+
+DONADS should not claim that a task is complete because an AI generated a convincing answer. Completion requires the requested real-world or on-chain state, the correct approval boundary and evidence that can be checked independently.

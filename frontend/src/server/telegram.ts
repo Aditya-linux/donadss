@@ -1,8 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { Task } from "@/lib/donads-api";
-import { pendingApprovalForTask } from "@/lib/approvals";
-import { claimTelegramUpdate, consumeTelegramLinkCode, getTelegramLink, putTelegramLinkCode, takeRateLimit } from "@/server/database";
+import { pendingApprovalForTask, pendingApprovals } from "@/lib/approvals";
+import { claimTelegramUpdate, consumeTelegramLinkCode, getTask, getTelegramLink, listTasks, putTelegramLinkCode, takeRateLimit } from "@/server/database";
 
 const LINK_TTL_MS = 10 * 60 * 1_000;
 
@@ -28,6 +28,7 @@ function codeHash(code: string): string { return createHash("sha256").update(cod
 
 export async function createTelegramLink(ownerId: string): Promise<{ url: string; expires_at_ms: number }> {
   if (!telegramConfigured()) throw new Error("Telegram notifications are not configured.");
+  await ensureTelegramWebhook();
   const code = `dn_${randomBytes(18).toString("base64url")}`;
   const expiresAtMs = Date.now() + LINK_TTL_MS;
   await putTelegramLinkCode(ownerId, codeHash(code), expiresAtMs);
@@ -38,7 +39,18 @@ async function telegramApi(method: string, payload: Record<string, unknown>): Pr
   const response = await fetch(`https://api.telegram.org/bot${setting("TELEGRAM_BOT_TOKEN")}/${method}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`Telegram API rejected ${method}.`);
+  const result = await response.json().catch(() => null) as { ok?: unknown; description?: unknown } | null;
+  if (!response.ok || result?.ok !== true) throw new Error(`Telegram API rejected ${method}${typeof result?.description === "string" ? `: ${result.description}` : "."}`);
+}
+
+async function ensureTelegramWebhook(): Promise<void> {
+  const webhookUrl = new URL("/api/telegram/webhook", setting("DONADS_PUBLIC_APP_URL")).toString();
+  await telegramApi("setWebhook", {
+    url: webhookUrl,
+    secret_token: setting("TELEGRAM_WEBHOOK_SECRET"),
+    allowed_updates: ["message"],
+    drop_pending_updates: false,
+  });
 }
 
 export async function handleTelegramUpdate(update: unknown): Promise<void> {
@@ -59,6 +71,15 @@ export async function handleTelegramUpdate(update: unknown): Promise<void> {
   }
   const ownerId = await consumeTelegramLinkCode(codeHash(code), chatId, typeof item.chat?.username === "string" ? item.chat.username : null);
   await telegramApi("sendMessage", { chat_id: chatId, text: ownerId ? "DONADS notifications are connected to your wallet. Approvals still happen securely inside DONADS." : "This link is invalid, expired, or already used. Create a new link inside DONADS." });
+  if (ownerId) {
+    // A user may connect Telegram after a financial checkpoint already exists.
+    // Synchronize a bounded backlog so no active approval is silently missed.
+    const approvals = pendingApprovals(await listTasks(ownerId, 100)).slice(-10);
+    await Promise.allSettled(approvals.map(async (approval) => {
+      const task = await getTask(ownerId, approval.task_id);
+      if (task) await sendTelegramCheckpoint(task);
+    }));
+  }
 }
 
 export async function sendTelegramCheckpoint(task: Task): Promise<void> {

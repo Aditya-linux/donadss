@@ -1,5 +1,5 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { injectedWallet, metaMaskWallet, phantomWallet } from "@rainbow-me/rainbowkit/wallets";
+import { metaMaskWallet } from "@rainbow-me/rainbowkit/wallets";
 import { defineChain, http } from "viem";
 import { mainnet } from "wagmi/chains";
 
@@ -36,9 +36,8 @@ export const wagmiConfig = getDefaultConfig({
   wallets: [
     {
       groupName: "Available wallets",
-      // Do not include the generic WalletConnect wallet. RainbowKit detects
-      // installed EIP-6963 wallets and keeps MetaMask/Phantom recognizable.
-      wallets: [metaMaskWallet, phantomWallet, injectedWallet],
+      // MetaMask only. No QR/WalletConnect and no other wallets.
+      wallets: [metaMaskWallet],
     },
   ],
   ssr: true,

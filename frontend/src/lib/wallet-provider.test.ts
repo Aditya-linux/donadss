@@ -1,95 +1,52 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectWalletConnectProvider, connectWalletProvider, disconnectWalletProvider, ensureMonadTestnet, requestWalletAccountSelection, walletConnectionMessage, WalletConnectionCancelledError } from "./wallet-provider";
+const wagmiMocks = vi.hoisted(() => ({ disconnect: vi.fn(), getAccount: vi.fn() }));
 
-describe("WalletConnect lifecycle", () => {
-  it("prefers an injected wallet on mobile instead of opening a QR handoff", async () => {
-    const injected = { request: vi.fn(async () => []) };
-    Object.defineProperty(window, "ethereum", { configurable: true, value: injected });
+vi.mock("@wagmi/core", () => ({
+  disconnect: wagmiMocks.disconnect,
+  getAccount: wagmiMocks.getAccount,
+}));
 
-    await expect(connectWalletProvider()).resolves.toBe(injected);
+vi.mock("@/lib/wallet-config", () => ({ wagmiConfig: {} }));
+
+import { connectWalletProvider, disconnectWalletProvider, ensureMonadTestnet, openWalletChooser, registerWalletChooser, requestWalletAccountSelection, walletConnectionMessage } from "./wallet-provider";
+
+describe("RainbowKit wallet lifecycle", () => {
+  beforeEach(async () => {
+    wagmiMocks.disconnect.mockReset().mockResolvedValue(undefined);
+    wagmiMocks.getAccount.mockReset();
     await disconnectWalletProvider();
-    Reflect.deleteProperty(window, "ethereum");
   });
 
-  it("rejects immediately and cleans up when the QR modal is closed", async () => {
-    let onState: ((state: { open?: boolean }) => void) | undefined;
-    const unsubscribe = vi.fn();
-    const disconnect = vi.fn(async () => undefined);
-    const close = vi.fn(async () => undefined);
-    const provider = {
-      request: vi.fn(),
-      connect: vi.fn(() => new Promise<void>(() => undefined)),
-      disconnect,
-      modal: {
-        close,
-        subscribeState(callback: (state: { open?: boolean }) => void) {
-          onState = callback;
-          return unsubscribe;
-        },
-      },
-    };
+  it("uses the EIP-1193 provider selected by the active Wagmi connector", async () => {
+    const provider = { request: vi.fn(async () => []) };
+    wagmiMocks.getAccount.mockReturnValue({ isConnected: true, connector: { getProvider: vi.fn(async () => provider) } });
 
-    const connection = connectWalletConnectProvider(provider);
-    onState?.({ open: true });
-    onState?.({ open: false });
-
-    await expect(connection).rejects.toBeInstanceOf(WalletConnectionCancelledError);
-    expect(disconnect).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    expect(unsubscribe).toHaveBeenCalledOnce();
+    await expect(connectWalletProvider()).resolves.toBe(provider);
   });
 
-  it("completes normally when the provider creates a session", async () => {
-    const unsubscribe = vi.fn();
-    const provider = {
-      request: vi.fn(),
-      connect: vi.fn(async () => { provider.session = { topic: "connected" }; }),
-      session: undefined as { topic: string } | undefined,
-      modal: { subscribeState: vi.fn(() => unsubscribe) },
-    };
-
-    await expect(connectWalletConnectProvider(provider)).resolves.toBeUndefined();
-    expect(unsubscribe).toHaveBeenCalledOnce();
+  it("fails clearly when no RainbowKit wallet is connected", async () => {
+    wagmiMocks.getAccount.mockReturnValue({ isConnected: false, connector: undefined });
+    await expect(connectWalletProvider()).rejects.toThrow("Wallet connector is not connected");
   });
 
-  it("reuses an existing WalletConnect session without opening a new QR request", async () => {
-    const provider = {
-      request: vi.fn(),
-      connect: vi.fn(async () => undefined),
-      session: { topic: "persisted-session" },
-      modal: { subscribeState: vi.fn() },
-    };
+  it("opens the registered RainbowKit chooser without creating a QR lifecycle", () => {
+    const open = vi.fn();
+    const unregister = registerWalletChooser(open);
 
-    await expect(connectWalletConnectProvider(provider)).resolves.toBeUndefined();
-    expect(provider.connect).not.toHaveBeenCalled();
-    expect(provider.modal.subscribeState).not.toHaveBeenCalled();
+    openWalletChooser();
+    expect(open).toHaveBeenCalledOnce();
+    unregister();
   });
 
-  it("returns cancellation immediately even if third-party cleanup does not settle", async () => {
-    let onState: ((state: { open?: boolean }) => void) | undefined;
-    const provider = {
-      request: vi.fn(),
-      connect: vi.fn(() => new Promise<void>(() => undefined)),
-      disconnect: vi.fn(() => new Promise<void>(() => undefined)),
-      modal: {
-        close: vi.fn(() => new Promise<void>(() => undefined)),
-        subscribeState(callback: (state: { open?: boolean }) => void) { onState = callback; },
-      },
-    };
-
-    const connection = connectWalletConnectProvider(provider);
-    onState?.({ open: true });
-    onState?.({ open: false });
-
-    await expect(connection).rejects.toBeInstanceOf(WalletConnectionCancelledError);
-    expect(provider.disconnect).toHaveBeenCalledOnce();
-    expect(provider.modal.close).toHaveBeenCalledOnce();
+  it("disconnects through Wagmi and clears the selected provider", async () => {
+    await disconnectWalletProvider();
+    expect(wagmiMocks.disconnect).toHaveBeenCalled();
   });
 });
 
 describe("Monad network enforcement", () => {
-  it("translates WalletConnect namespace errors into a recoverable Monad message", () => {
+  it("translates chain namespace errors into a recoverable Monad message", () => {
     expect(walletConnectionMessage(new Error("Missing or invalid request() chainId: eip155:10143"))).toMatch(/Monad-compatible wallet.*chain 10143/i);
   });
 

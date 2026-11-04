@@ -1,11 +1,16 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import type { Task } from "@/lib/donads-api";
 import { ChatShell, DeleteHistoryDialog, taskAddressSuggestions, WalletMenuDialog } from "./chat-shell";
 
-const walletMocks = vi.hoisted(() => ({ connect: vi.fn() }));
+const walletMocks = vi.hoisted(() => ({ connect: vi.fn(), choose: vi.fn() }));
+
+vi.mock("@/components/wallet-kit", () => ({
+  WalletConnectControl: (props: { onConnected: (address: string) => void }) => (
+    <button type="button" aria-label="Connect wallet" onClick={() => walletMocks.choose(props)}>Connect wallet</button>
+  ),
+}));
 
 vi.mock("@/lib/wallet-provider", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/wallet-provider")>(),
@@ -13,7 +18,7 @@ vi.mock("@/lib/wallet-provider", async (importOriginal) => ({
 }));
 
 describe("ChatShell", () => {
-  afterEach(() => { vi.unstubAllGlobals(); walletMocks.connect.mockReset(); window.localStorage.clear(); });
+  afterEach(() => { vi.unstubAllGlobals(); walletMocks.connect.mockReset(); walletMocks.choose.mockReset(); window.localStorage.clear(); });
 
   it("uses one task surface and opens informational specialist details", async () => {
     const user = userEvent.setup();
@@ -62,8 +67,7 @@ describe("ChatShell", () => {
     expect(screen.queryByText("notes.md")).not.toBeInTheDocument();
   });
 
-  it("returns to the idle workspace when the wallet chooser is cancelled", async () => {
-    walletMocks.connect.mockRejectedValueOnce(new WalletConnectionCancelledError());
+  it("keeps the workspace idle when the RainbowKit chooser is closed", async () => {
     const user = userEvent.setup();
     render(<ChatShell />);
 
@@ -78,6 +82,7 @@ describe("ChatShell", () => {
 
   it("turns an unsupported-chain failure into a dismissible wallet choice", async () => {
     walletMocks.connect.mockRejectedValueOnce(new Error("Missing or invalid request() chainId: eip155:10143"));
+    walletMocks.choose.mockImplementationOnce(({ onConnected }: { onConnected: (address: string) => void }) => onConnected("0x1111111111111111111111111111111111111111"));
     const user = userEvent.setup();
     render(<ChatShell />);
 

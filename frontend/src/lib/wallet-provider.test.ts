@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { connectWalletConnectProvider, connectWalletProvider, disconnectWalletProvider, ensureMonadTestnet, walletConnectionMessage, WalletConnectionCancelledError } from "./wallet-provider";
+import { connectWalletConnectProvider, connectWalletProvider, disconnectWalletProvider, ensureMonadTestnet, requestWalletAccountSelection, walletConnectionMessage, WalletConnectionCancelledError } from "./wallet-provider";
 
 describe("WalletConnect lifecycle", () => {
   it("prefers an injected wallet on mobile instead of opening a QR handoff", async () => {
@@ -108,5 +108,24 @@ describe("Monad network enforcement", () => {
 
     await expect(ensureMonadTestnet({ request })).resolves.toBeUndefined();
     expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ method: "wallet_addEthereumChain" }));
+  });
+});
+
+describe("wallet account selection", () => {
+  it("requests a fresh injected-wallet account permission", async () => {
+    const request = vi.fn(async () => [{ parentCapability: "eth_accounts" }]);
+    await expect(requestWalletAccountSelection({ request })).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith({ method: "wallet_requestPermissions", params: [{ eth_accounts: {} }] });
+  });
+
+  it("falls back when a wallet does not implement permission selection", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("Method not found"), { code: -32601 }); });
+    await expect(requestWalletAccountSelection({ request })).resolves.toBeUndefined();
+  });
+
+  it("preserves an explicit user rejection", async () => {
+    const rejection = Object.assign(new Error("User rejected"), { code: 4001 });
+    const request = vi.fn(async () => { throw rejection; });
+    await expect(requestWalletAccountSelection({ request })).rejects.toBe(rejection);
   });
 });

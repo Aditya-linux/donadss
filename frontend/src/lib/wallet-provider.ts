@@ -143,6 +143,22 @@ export async function ensureMonadTestnet(provider: WalletProvider): Promise<void
   }
 }
 
+export async function requestWalletAccountSelection(provider: WalletProvider): Promise<void> {
+  try {
+    await provider.request({ method: "wallet_requestPermissions", params: [{ eth_accounts: {} }] });
+  } catch (reason) {
+    const code = typeof reason === "object" && reason !== null && "code" in reason
+      ? Number((reason as { code: unknown }).code)
+      : 0;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    // EIP-2255 is not implemented by every injected wallet. In that case,
+    // eth_requestAccounts remains the standards-compatible fallback. A real
+    // user rejection must still stop the switch.
+    if (code === -32601 || code === 4200 || /unsupported|not implemented|method not found/i.test(message)) return;
+    throw reason;
+  }
+}
+
 export async function connectWalletProvider(): Promise<WalletProvider> {
   if (activeProvider) return activeProvider;
 

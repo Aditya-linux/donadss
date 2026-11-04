@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import type { Task } from "@/lib/donads-api";
-import { ChatShell, DeleteHistoryDialog, taskAddressSuggestions } from "./chat-shell";
+import { ChatShell, DeleteHistoryDialog, taskAddressSuggestions, WalletMenuDialog } from "./chat-shell";
 
 const walletMocks = vi.hoisted(() => ({ connect: vi.fn() }));
 
@@ -118,5 +118,20 @@ describe("DeleteHistoryDialog", () => {
     expect(screen.getByText(/transaction receipts and security audit evidence remain preserved/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete history" }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+});
+
+describe("WalletMenuDialog", () => {
+  it("offers distinct change-wallet and disconnect actions", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onDisconnect = vi.fn();
+    render(<WalletMenuDialog address="0x1111111111111111111111111111111111111111" working={false} onChange={onChange} onDisconnect={onDisconnect} onClose={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "Connected wallet" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Change wallet" }));
+    await user.click(screen.getByRole("button", { name: "Disconnect from DONADS" }));
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onDisconnect).toHaveBeenCalledOnce();
   });
 });

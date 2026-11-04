@@ -1,13 +1,13 @@
 "use client";
 
-import { Bell, ChevronRight, CircleDollarSign, Clock3, Coins, Gauge, Menu, Megaphone, MessageSquarePlus, Radar, ShieldCheck, ShoppingBag, Trash2, WalletCards, Workflow, X } from "lucide-react";
+import { Bell, ChevronRight, CircleDollarSign, Clock3, Coins, Gauge, LogOut, Menu, Megaphone, MessageSquarePlus, Radar, RefreshCw, ShieldCheck, ShoppingBag, Trash2, WalletCards, Workflow, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MascotLoader, MascotMark, SpecialistMark } from "@/components/mascot";
 import { UnifiedTaskWorkspace } from "@/components/unified-task-workspace";
 import { createAuthChallenge, createTelegramConnection, deleteTaskHistory, getAiUsage, getPushConfig, getTask, getTelegramConnection, getWalletBalance, getWalletTokenBalances, listPendingApprovals, listTaskHistory, removeTelegramConnection, restoreWalletSession, revokeWalletSession, setAccessToken, type AiUsage, type Task, type TelegramConnection, type TokenBalance, type WalletBalance, verifyWalletSignature } from "@/lib/donads-api";
 import type { PendingApproval } from "@/lib/approvals";
 import { canDeleteTaskHistory, taskDisplayTitle } from "@/lib/task-history";
-import { connectWalletProvider, disconnectWalletProvider, walletConnectionMessage, WalletConnectionCancelledError } from "@/lib/wallet-provider";
+import { connectWalletProvider, disconnectWalletProvider, requestWalletAccountSelection, walletConnectionMessage, WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import { currentPushSubscription, disablePushNotifications, enablePushNotifications, pushFailureMessage, pushSupported } from "@/lib/push-client";
 
 const specialists = [
@@ -124,6 +124,15 @@ function BalanceDialog({ native, tokens, onClose }: { native: WalletBalance; tok
   </dialog>;
 }
 
+export function WalletMenuDialog({ address, working, onChange, onDisconnect, onClose }: { address: string; working: boolean; onChange: () => void; onDisconnect: () => void; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { const dialog = ref.current; if (!dialog) return; if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", ""); }, []);
+  return <dialog ref={ref} onCancel={(event) => { event.preventDefault(); if (!working) onClose(); }} onClick={(event) => { if (event.target === event.currentTarget && !working) onClose(); }} className="m-auto w-[calc(100%-2rem)] max-w-sm rounded-2xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-foreground/30 backdrop:backdrop-blur-sm">
+    <div className="flex items-start gap-3 border-b border-border p-5"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted"><WalletCards className="size-5" aria-hidden="true" /></span><div className="min-w-0 flex-1"><h2 className="text-lg font-semibold tracking-tight">Connected wallet</h2><p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={address}>{address}</p></div><button type="button" aria-label="Close wallet menu" disabled={working} onClick={onClose} className="grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"><X className="size-4" aria-hidden="true" /></button></div>
+    <div className="space-y-2 p-4"><button type="button" disabled={working} aria-busy={working} onClick={onChange} className="flex min-h-12 w-full items-center gap-3 rounded-xl bg-primary px-4 text-left text-sm font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-50"><RefreshCw className="size-4" aria-hidden="true" /><span className="flex-1">{working ? "Opening wallet selection…" : "Change wallet"}</span></button><button type="button" disabled={working} onClick={onDisconnect} className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-50"><LogOut className="size-4" aria-hidden="true" /><span>Disconnect from DONADS</span></button><p className="px-1 pt-2 text-xs leading-5 text-muted-foreground">Changing wallets ends this DONADS session. History and approvals remain attached to the original wallet.</p></div>
+  </dialog>;
+}
+
 export function DeleteHistoryDialog({ task, working, error, onClose, onConfirm }: { task: Task; working: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const deletion = canDeleteTaskHistory(task);
@@ -166,6 +175,7 @@ export function ChatShell() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [tokenBalances, setTokenBalances] = useState<TokenBalance[]>([]);
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<Task | null>(null);
   const [deletingHistory, setDeletingHistory] = useState(false);
   const [deleteHistoryError, setDeleteHistoryError] = useState<string | null>(null);
@@ -190,9 +200,9 @@ export function ChatShell() {
     return () => { active = false; window.clearInterval(interval); document.removeEventListener("visibilitychange", refresh); };
   }, [signedInWallet]);
 
-  async function signIn() {
+  async function signIn(selectAccount = false) {
     setSigningIn(true); setAuthError(null);
-    try { const provider = await connectWalletProvider(); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
+    try { const provider = await connectWalletProvider(); if (selectAccount && typeof window !== "undefined" && provider === window.ethereum) await requestWalletAccountSelection(provider); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
     catch (error) {
       // Never leave a rejected WalletConnect session cached. A retry must open
       // the chooser again so the user can select a compatible wallet.
@@ -203,7 +213,18 @@ export function ChatShell() {
     finally { setSigningIn(false); }
   }
 
-  async function signOut() { setSigningIn(true); setAuthError(null); try { await revokeWalletSession(); await disconnectWalletProvider(); } catch (error) { setAuthError(error instanceof Error ? error.message : "Server logout failed; the local session was cleared."); } finally { setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setApprovals([]); setApprovalInboxOpen(false); setBalanceDialogOpen(false); setDeleteCandidate(null); setDeleteHistoryError(null); setHistoryReady(true); setSigningIn(false); } }
+  async function signOut() { setSigningIn(true); setAuthError(null); try { await revokeWalletSession(); await disconnectWalletProvider(); } catch (error) { setAuthError(error instanceof Error ? error.message : "Server logout failed; the local session was cleared."); } finally { setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setApprovals([]); setApprovalInboxOpen(false); setBalanceDialogOpen(false); setWalletMenuOpen(false); setDeleteCandidate(null); setDeleteHistoryError(null); setHistoryReady(true); setSigningIn(false); } }
+
+  async function changeWallet() {
+    setWalletMenuOpen(false);
+    setSigningIn(true);
+    setAuthError(null);
+    try { await revokeWalletSession(); } catch { /* Local identity is cleared below even if server revocation is unavailable. */ }
+    await disconnectWalletProvider().catch(() => undefined);
+    setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setApprovals([]); setHistoryReady(true);
+    setSigningIn(false);
+    await signIn(true);
+  }
 
   async function reviewApproval(approval: PendingApproval) {
     setApprovalError(null);
@@ -243,6 +264,7 @@ export function ChatShell() {
     {selectedSpecialist ? <SpecialistDialog specialist={selectedSpecialist} onClose={closeSpecialist} /> : null}
     {approvalInboxOpen ? <ApprovalDialog approvals={approvals} onClose={() => setApprovalInboxOpen(false)} onReview={(approval) => void reviewApproval(approval)} /> : null}
     {balanceDialogOpen && balance ? <BalanceDialog native={balance} tokens={tokenBalances} onClose={() => setBalanceDialogOpen(false)} /> : null}
+    {walletMenuOpen && signedInWallet ? <WalletMenuDialog address={signedInWallet} working={signingIn} onChange={() => void changeWallet()} onDisconnect={() => void signOut()} onClose={() => setWalletMenuOpen(false)} /> : null}
     {deleteCandidate ? <DeleteHistoryDialog task={deleteCandidate} working={deletingHistory} error={deleteHistoryError} onClose={() => { if (!deletingHistory) { setDeleteCandidate(null); setDeleteHistoryError(null); } }} onConfirm={() => void confirmHistoryDeletion()} /> : null}
     <Sidebar open={sidebarOpen} history={history} historyReady={historyReady} aiUsage={aiUsage} onClose={() => setSidebarOpen(false)} onNewTask={() => { setSelectedTask(null); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} onSpecialist={(specialist) => { specialistTrigger.current = document.activeElement as HTMLElement; setSelectedSpecialist(specialist); }} onHistory={(task) => { setSelectedTask(task); setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} onDeleteHistory={(task) => { setDeleteHistoryError(null); setDeleteCandidate(task); }} />
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -252,7 +274,7 @@ export function ChatShell() {
         <div className="ml-auto flex min-w-0 items-center gap-2">
           {signedInWallet ? <button type="button" aria-label={`Open action inbox${approvals.length ? `, ${approvals.length} pending` : ""}`} onClick={() => setApprovalInboxOpen(true)} className="relative grid size-10 place-items-center rounded-full border border-border hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"><Bell className="size-4" aria-hidden="true" />{approvals.length ? <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 font-mono text-[10px] font-semibold text-destructive-foreground">{Math.min(99, approvals.length)}</span> : null}</button> : null}
           {signedInWallet && balance ? <button type="button" aria-label="View Testnet token balances" onClick={() => setBalanceDialogOpen(true)} className="grid size-10 place-items-center rounded-full bg-muted text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:flex sm:w-auto sm:px-3"><Coins className="size-4 sm:hidden" aria-hidden="true" /><span className="hidden font-mono tabular-nums sm:inline">{Number(balance.balance_mon).toLocaleString(undefined, { maximumFractionDigits: 4 })} MON</span><span className="sr-only">Balances</span></button> : null}
-          <button type="button" aria-label={signedInWallet ? "Sign out wallet session" : "Connect wallet"} onClick={() => void (signedInWallet ? signOut() : signIn())} disabled={signingIn} className="grid size-10 shrink-0 place-items-center rounded-full border border-border text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-60 sm:flex sm:w-auto sm:gap-2 sm:px-3"><WalletCards className="size-4" aria-hidden="true" /><span className={signedInWallet ? "hidden sm:inline" : "donads-wallet-label"}>{signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : "Connect wallet"}</span></button>
+          <button type="button" aria-label={signedInWallet ? "Manage connected wallet" : "Connect wallet"} onClick={() => void (signedInWallet ? setWalletMenuOpen(true) : signIn())} disabled={signingIn} className="grid size-10 shrink-0 place-items-center rounded-full border border-border text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-60 sm:flex sm:w-auto sm:gap-2 sm:px-3"><WalletCards className="size-4" aria-hidden="true" /><span className={signedInWallet ? "hidden sm:inline" : "donads-wallet-label"}>{signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : "Connect wallet"}</span></button>
         </div>
       </header>
       {authError || approvalError ? <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-destructive/5 px-3 py-2 text-xs text-destructive sm:px-5"><span className="min-w-0 flex-1 leading-5">{authError ?? approvalError}</span><div className="ml-auto flex shrink-0 items-center gap-1">{authError ? <button type="button" onClick={() => void signIn()} className="min-h-10 rounded-lg px-3 font-medium underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring">Choose another wallet</button> : null}<button type="button" aria-label="Dismiss wallet message" onClick={() => { setAuthError(null); setApprovalError(null); }} className="grid size-10 place-items-center rounded-lg hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"><X className="size-4" aria-hidden="true" /></button></div></div> : null}

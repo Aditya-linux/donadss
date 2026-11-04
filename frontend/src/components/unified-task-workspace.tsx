@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, CheckCircle2, ChevronRight, CircleDollarSign, Clock3, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
+import { ArrowUp, ChevronRight, CircleDollarSign, Clock3, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { decodeFunctionResult, encodeDeployData, encodeFunctionData, getAddress, keccak256, stringToHex } from "viem";
@@ -35,6 +35,7 @@ import { DONADS_AI_POLICY } from "@/lib/ai-policy";
 import { forgetPendingFlowHash, readPendingFlowHash, rememberPendingFlowHash } from "@/lib/flow-submission";
 import { connectWalletProvider, ensureMonadTestnet, erc20TransferData, monToWeiHex } from "@/lib/wallet-provider";
 import { formatTaskDuration, MONAD_TESTNET_EXPLORER, taskCompletionTime } from "@/lib/task-receipt";
+import { shouldOfferPdf, taskResponseText } from "@/lib/task-response";
 import { DonadsEscrowAbi, DonadsEscrowBytecode, DonadsPolicyVaultAbi, DonadsPolicyVaultBytecode } from "@/contracts/generated";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; task?: CompletedTask; swapQuote?: SwapQuote; durationMs?: number; transactionHashes?: string[] };
@@ -82,19 +83,10 @@ const specialistIcons = {
   sentinel: ShieldCheck,
 } as const;
 
-function resultText(task: CompletedTask): string {
-  if (task.bot === "operator") {
-    const workflow = task.status.data.workflow;
-    const completed = workflow.steps.filter((step) => step.status === "completed").length;
-    return `${task.status.summary} ${completed}/${workflow.steps.length} specialist steps completed.`;
-  }
-  return task.status.summary;
-}
-
 function historyMessages(task: Task | null): Message[] {
   if (!task) return [];
   const result = task.status.state === "completed" ? task as CompletedTask : null;
-  const text = result ? resultText(result) : task.status.state === "failed" ? `This task failed: ${task.status.error}` : `This task is ${task.status.state}.`;
+  const text = result ? taskResponseText(result) : task.status.state === "failed" ? `This task failed: ${task.status.error}` : `This task is ${task.status.state}.`;
   return [
     { id: `${task.id}-user`, role: "user", text: task.prompt },
     { id: `${task.id}-assistant`, role: "assistant", text, task: result ?? undefined },
@@ -376,7 +368,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
           setProgress(active ? `${active.bot} is completing ${active.title.toLowerCase()}…` : "Operator is verifying specialist outputs…");
         }, signal);
       }
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: resultText(completed), task: completed }]);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: taskResponseText(completed), task: completed }]);
       onTaskCompleted?.();
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
@@ -387,7 +379,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
   }
 
   function updateFlowMessage(messageId: string, task: FlowCompletedTask) {
-    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: resultText(task), task } : message));
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: taskResponseText(task), task } : message));
     onTaskCompleted?.();
   }
 
@@ -552,13 +544,12 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
             {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
               <div className="min-w-0">
-                <p>{message.text}</p>
+                <p className="whitespace-pre-wrap">{message.text}</p>
                 {message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}
                 {message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}
-                {message.task?.bot === "operator" ? <div className="mt-3 space-y-2">{message.task.status.data.workflow.steps.map((step) => <div key={step.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><CheckCircle2 className="size-4" /><span className="capitalize">{step.bot}</span><span className="text-muted-foreground">{step.title}</span></div>)}</div> : null}
                 <TransactionLinks hashes={message.transactionHashes} />
                 <TaskTiming task={message.task} durationMs={message.durationMs} />
-                {message.task ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}
+                {message.task && shouldOfferPdf(message.task) ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}
               </div>
             </li>)}
           </ol>

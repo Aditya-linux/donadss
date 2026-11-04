@@ -19,6 +19,7 @@ describe("ChatShell", () => {
     render(<ChatShell />);
     expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
     expect(screen.getByLabelText("Ask DONADS to complete a task")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Specialists" }));
     expect(screen.getByText("Scout")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Learn about Scout" }));
     expect(screen.getByRole("heading", { name: "Scout" })).toBeInTheDocument();

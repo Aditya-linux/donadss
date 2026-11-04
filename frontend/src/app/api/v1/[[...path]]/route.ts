@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import { formatEther } from "viem";
 import { DONADS_AI_POLICY } from "@/lib/ai-policy";
+import { pendingApprovals } from "@/lib/approvals";
 
 import type {
   BrandProfile,
@@ -215,6 +216,7 @@ async function route(request: Request, context: Context): Promise<Response> {
 
   const { ownerId } = await authenticate(request);
   if (method === "GET" && segments.join("/") === "auth/session") return json({ owner_id: ownerId });
+  if (method === "GET" && segments.join("/") === "approvals") return json(pendingApprovals(await listTasks(ownerId, 100)));
   if (method === "GET" && segments.join("/") === "wallet/balance") {
     const value = String(await rpc("eth_getBalance", [ownerId, "latest"]));
     return json({ address: ownerId, chain_id: 10143, network: "Monad Testnet", symbol: "MON", balance_atomic: BigInt(value).toString(), balance_mon: formatEther(BigInt(value)) });

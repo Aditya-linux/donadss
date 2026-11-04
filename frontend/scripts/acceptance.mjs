@@ -144,6 +144,10 @@ assert(operatorResult.status.data.workflow.steps.every((step) => step.status ===
 const history = await request("/api/v1/tasks?limit=20", {}, token);
 assert(history.response.ok, `History failed: ${JSON.stringify(history.payload)}`);
 assert(history.payload.some((task) => task.id === created.payload.id), "Completed task was not persisted in wallet history.");
+const approvals = await request("/api/v1/approvals", {}, token);
+assert(approvals.response.ok, `Action inbox failed: ${JSON.stringify(approvals.payload)}`);
+assert(approvals.payload.some((approval) => approval.task_id === flow.payload.id && approval.kind === "receipt_verification"), "Submitted Flow checkpoint was absent from the cross-device action inbox.");
+assert(approvals.payload.every((approval) => approval.task_id && approval.requested_at_ms), "Action inbox returned an invalid checkpoint.");
 
 const logout = await request("/api/v1/auth/logout", { method: "POST" }, token);
 assert(logout.response.status === 204, "Logout did not return 204.");
@@ -168,4 +172,5 @@ console.log(JSON.stringify({
   ai_remaining_today: aiUsage.payload.remaining_today,
   ai_configured: aiUsage.payload.configured,
   flow_submission_checkpoint: flowSubmitted.payload.status.data.workflow.state,
+  pending_action_checkpoints: approvals.payload.length,
 }, null, 2));

@@ -799,6 +799,13 @@ export async function listTaskHistory(
   return readJson<Task[]>(response);
 }
 
+export async function listPendingApprovals(
+  signal?: AbortSignal,
+): Promise<import("@/lib/approvals").PendingApproval[]> {
+  const response = await apiFetch(`${API_URL}/v1/approvals`, { signal });
+  return readJson<import("@/lib/approvals").PendingApproval[]>(response);
+}
+
 export async function submitTaskFeedback(
   id: string,
   rating: 1 | 5,

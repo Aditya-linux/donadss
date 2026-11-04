@@ -61,6 +61,46 @@ The unified chat accepts a complete command such as `Send 0.01 MON to 0x… for 
 
 A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
 
+### Cross-device action checkpoints
+
+After signing in with the same wallet on a phone, DONADS restores that wallet's task history and shows an **Action needed** inbox. The inbox is derived from persisted workflow state, so phone and desktop cannot disagree about whether a task is actually paused. It currently covers Flow intent review, wallet signing, receipt verification, Commerce intent review, and planned Operator runs.
+
+The inbox refreshes while the app is visible and marks an existing checkpoint as waiting after two minutes. Time alone never creates an approval and never grants authority. Opening a financial checkpoint reveals the exact task; the connected mobile wallet must still display and sign the final transaction. Native lock-screen Web Push is a remaining enhancement and will be opt-in, privacy-minimized, and revocable.
+
+## Frozen testnet delivery sequence
+
+The approved product scope will be implemented in this order without adding a new specialist:
+
+1. ERC-20 transfers through chat, including exact token contract, recipient, amount, simulation, wallet signature, and receipt/balance verification.
+2. Native MON and allowlisted token balances with chain and freshness labels.
+3. One allowlisted Monad Testnet DEX adapter.
+4. Deterministic swap quote, minimum output, slippage and price-impact policy, simulation, explicit wallet signing, and receipt verification.
+5. P2P escrow with fund, release, refund/timeout, and milestone receipts.
+6. Scout evidence records containing source URL, retrieval time, extracted evidence, and content hash.
+7. One authorized physical-product merchant integration that returns both payment and order receipts.
+8. Restricted, expiring, revocable session-wallet permissions backed by the policy vault.
+
+Every financial workflow must also support simulation mode, explainable Sentinel blocking, and a proof-of-completion record containing the workflow steps, approvals, evidence, transaction hashes, balance changes, and final status. The security audit remains a mandatory mainnet gate but is intentionally deferred while the testnet feature pipeline is completed.
+
+### Final manual acceptance suite
+
+The feature set is not called complete until a user can run and preserve evidence for at least these testnet cases:
+
+1. Confirm a native MON chat transfer.
+2. Reject a native MON intent without broadcasting.
+3. Resume a submitted transfer after refresh without duplicate broadcast.
+4. Confirm an ERC-20 chat transfer and exact balance delta.
+5. Simulate a swap without broadcasting.
+6. Confirm an allowlisted DEX swap within minimum-output policy.
+7. Block a swap whose slippage or price impact exceeds policy, with a precise reason.
+8. Fund and release or refund a P2P escrow.
+9. Produce source-hashed Scout research that drives a later workflow.
+10. Open a paused checkpoint on a phone and finish it with the same wallet.
+11. Complete a real crypto merchant order with both chain and merchant receipts.
+12. Grant, exercise, revoke, and prove expiry of a restricted session permission.
+
+Each case needs an automated test where practical and a saved manual receipt. A feature is not complete when only its UI, intent, mock, or transaction hash exists.
+
 ## Wallet and payment model
 
 DONADS agents do **not** currently own wallets, private keys, or independent funds. Wallet sign-in proves task ownership but cannot move money. For a payment, Flow creates an exact intent containing the Monad network, payer, recipient, asset, and amount. Sentinel validates that intent, the browser wallet shows the final transaction for explicit user approval, and the wallet signs and broadcasts it. DONADS then reads the transaction from Monad RPC and records completion only after the receipt and exact values match.
@@ -203,4 +243,4 @@ This generates an unfunded ephemeral wallet in memory, signs into the real API, 
 7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
 8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
 
-The immediate next feature after this security foundation is the first real crypto merchant connector. It extends Commerce; it does not add a new bot.
+The immediate next implementation item is ERC-20 transfer support in Flow. The merchant connector remains seventh in the frozen delivery sequence and extends Commerce; it does not add a new bot.

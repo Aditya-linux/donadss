@@ -318,7 +318,7 @@ impl PersistentTaskStore {
             .filter(|task| task.owner_id == owner_id)
             .cloned()
             .collect();
-        tasks.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at_ms));
         tasks.truncate(limit);
         tasks
     }

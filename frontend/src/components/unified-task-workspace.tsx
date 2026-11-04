@@ -527,21 +527,21 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
       {working ? <MascotLoader label={progress} /> : null}
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-40 pt-8 sm:px-6">
+      <div className="donads-workspace-width mx-auto flex w-full flex-1 flex-col px-4 pb-40 pt-6 sm:px-6 sm:pt-8 2xl:px-8 2xl:pt-10">
         {!messages.length ? (
-          <section className="my-auto flex flex-col items-center py-12 text-center">
+          <section className="my-auto flex w-full min-w-0 flex-col items-center py-12 text-center">
             <Mascot size={120} />
-            <h1 className="mt-7 text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">What should DONADS complete?</h1>
-            <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">One request in. The right specialists coordinate behind the scenes, with wallet approval reserved for you.</p>
-            <div className="mt-8 grid w-full gap-2 sm:grid-cols-2">
-              {examples.map((example) => <button key={example} type="button" onClick={() => setPrompt(example)} className="rounded-xl border border-border bg-card p-3 text-left text-xs leading-5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">{example}</button>)}
+            <h1 className="mt-7 max-w-full text-balance text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">What should DONADS complete?</h1>
+            <p className="mt-4 max-w-xl text-pretty text-sm leading-6 text-muted-foreground">One request in. The right specialists coordinate behind the scenes, with wallet approval reserved for you.</p>
+            <div className="mt-8 grid w-full min-w-0 gap-2 sm:grid-cols-2">
+              {examples.map((example) => <button key={example} type="button" onClick={() => setPrompt(example)} className="min-w-0 break-words rounded-xl border border-border bg-card p-3 text-left text-xs leading-5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">{example}</button>)}
             </div>
           </section>
         ) : (
           <ol className="space-y-7 py-4" aria-live="polite">
-            {messages.map((message) => <li key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "flex max-w-[92%] gap-3 text-sm leading-6"}>
+            {messages.map((message) => <li key={message.id} className={message.role === "user" ? "donads-user-message ml-auto rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground" : "donads-message-copy flex w-full gap-3 text-sm leading-6"}>
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
               <div className="min-w-0">
                 <p className="whitespace-pre-wrap">{message.text}</p>
@@ -556,8 +556,8 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         )}
         {error ? <p role="alert" className="mt-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</p> : null}
       </div>
-      <div className="fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background to-transparent px-4 pb-5 pt-10 lg:left-72">
-        <form onSubmit={submit} className="mx-auto max-w-3xl rounded-2xl border border-border bg-card p-2 shadow-lg" aria-describedby={attachmentError ? "attachment-error" : undefined}>
+      <div className="donads-composer-frame fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background to-transparent px-3 pt-10 sm:px-6 2xl:pt-12">
+        <form onSubmit={submit} className="donads-workspace-width mx-auto w-full min-w-0 rounded-2xl border border-border bg-card p-2 shadow-lg" aria-describedby={attachmentError ? "attachment-error" : undefined}>
           {attachments.length ? <ul className="flex flex-wrap gap-2 border-b border-border px-1 pb-2" aria-label="Selected attachments">{attachments.map((attachment) => <li key={attachment.id} className="flex max-w-full items-center gap-2 rounded-lg bg-muted p-1.5 pr-1 text-xs">{attachment.previewUrl ? <Image src={attachment.previewUrl} alt="" width={32} height={32} unoptimized className="size-8 rounded-md object-cover" /> : <span className="grid size-8 place-items-center rounded-md bg-card"><FileText className="size-4" aria-hidden="true" /></span>}<span className="max-w-40 truncate">{attachment.file.name}</span><button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={`Remove ${attachment.file.name}`} className="grid size-10 place-items-center rounded-md hover:bg-card focus-visible:ring-2 focus-visible:ring-ring"><X className="size-4" aria-hidden="true" /></button></li>)}</ul> : null}
           {attachmentError ? <div id="attachment-error" role="alert" className="mx-1 mt-1 flex items-start gap-2 rounded-lg bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive"><ImageIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{attachmentError}</span></div> : null}
           <div className="flex items-end gap-2">
@@ -565,11 +565,11 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
             <input ref={fileInput} id="task-attachments" type="file" multiple onChange={(event) => void selectFiles(event)} className="sr-only" />
             <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} disabled={working || attachments.length >= MAX_ATTACHMENTS} className="grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-40"><Paperclip className="size-5" aria-hidden="true" /></button>
             <label className="sr-only" htmlFor="unified-task">Ask DONADS to complete a task</label>
-            <textarea id="unified-task" rows={2} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Describe the outcome, sources, and constraints…" className="max-h-36 min-h-12 flex-1 resize-none bg-transparent px-1 py-3 text-sm outline-none focus-visible:ring-0" />
+            <textarea id="unified-task" rows={2} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Describe the outcome, sources, and constraints…" className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-1 py-3 text-sm outline-none focus-visible:ring-0" />
             <button type="submit" aria-label="Start task" disabled={!prompt.trim() || working} className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-40"><ArrowUp className="size-5" aria-hidden="true" /></button>
           </div>
         </form>
-        <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">DONADS prepares actions; your wallet confirms every transaction.</p>
+        <p className="donads-workspace-width mx-auto mt-2 text-center text-xs text-muted-foreground">DONADS prepares actions; your wallet confirms every transaction.</p>
       </div>
     </main>
   );

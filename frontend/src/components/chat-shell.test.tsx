@@ -27,6 +27,14 @@ describe("ChatShell", () => {
     expect(screen.getByText("Questions to ask")).toBeInTheDocument();
   });
 
+  it("uses the shared responsive shell, workspace, and composer widths", () => {
+    render(<ChatShell />);
+
+    expect(screen.getByLabelText("DONADS navigation")).toHaveClass("donads-sidebar");
+    expect(screen.getByRole("heading", { name: "What should DONADS complete?" }).closest(".donads-workspace-width")).not.toBeNull();
+    expect(screen.getByLabelText("Ask DONADS to complete a task").closest("form")).toHaveClass("donads-workspace-width");
+  });
+
   it("requires wallet identity before dispatching a real task", async () => {
     const user = userEvent.setup();
     render(<ChatShell />);

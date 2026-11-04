@@ -5,9 +5,7 @@ import { FormEvent, useState } from "react";
 import { applyFlowAction, confirmFlowTransaction, createFlowTask, FlowCompletedTask, waitForTask } from "@/lib/donads-api";
 import { MascotLoader } from "@/components/mascot";
 import { ReportDownloadButton } from "@/components/report-download-button";
-
-type EthereumProvider = { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
-declare global { interface Window { ethereum?: EthereumProvider } }
+import { connectWalletProvider, getConnectedWalletProvider, type WalletProvider } from "@/lib/wallet-provider";
 
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring";
 const TESTNET_CHAIN_HEX = "0x279f";
@@ -21,7 +19,7 @@ function monToWeiHex(value: string): string {
   return `0x${wei.toString(16)}`;
 }
 
-async function ensureMonadTestnet(provider: EthereumProvider) {
+async function ensureMonadTestnet(provider: WalletProvider) {
   try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: TESTNET_CHAIN_HEX }] }); }
   catch (reason) {
     const code = typeof reason === "object" && reason !== null && "code" in reason ? Number((reason as { code: unknown }).code) : 0;
@@ -35,8 +33,8 @@ export function FlowWorkspace() {
   const [walletAddress,setWalletAddress]=useState(""); const [task,setTask]=useState<FlowCompletedTask|null>(null); const [working,setWorking]=useState(false); const [error,setError]=useState<string|null>(null);
 
   async function connectWallet() {
-    setError(null); const provider=window.ethereum; if(!provider){setError("Install a compatible EVM wallet to use real Monad execution.");return} setWorking(true);
-    try { await ensureMonadTestnet(provider); const accounts=await provider.request({method:"eth_requestAccounts"}) as string[]; if(!accounts[0])throw new Error("Wallet returned no account."); setWalletAddress(accounts[0]); }
+    setError(null); setWorking(true);
+    try { const provider=await connectWalletProvider(); await ensureMonadTestnet(provider); const accounts=await provider.request({method:"eth_requestAccounts"}) as string[]; if(!accounts[0])throw new Error("Wallet returned no account."); setWalletAddress(accounts[0]); }
     catch(reason){setError(reason instanceof Error?reason.message:"Wallet connection was rejected.")}finally{setWorking(false)}
   }
 
@@ -44,11 +42,11 @@ export function FlowWorkspace() {
 
   async function reject(){if(!task)return;setWorking(true);setError(null);try{setTask((await applyFlowAction(task.id,{action:"reject",reason:"Rejected by user"})).task)}catch(reason){setError(reason instanceof Error?reason.message:"Rejection failed.")}finally{setWorking(false)}}
 
-  async function authorizeAndSend(){if(!task||!window.ethereum)return;setWorking(true);setError(null);try{
+  async function authorizeAndSend(){const provider=getConnectedWalletProvider();if(!task||!provider)return;setWorking(true);setError(null);try{
     const authorized=(await applyFlowAction(task.id,{action:"approve"})).task; setTask(authorized); const workflow=authorized.status.data.workflow;
-    await ensureMonadTestnet(window.ethereum); const accounts=await window.ethereum.request({method:"eth_requestAccounts"}) as string[]; const from=accounts[0];
+    await ensureMonadTestnet(provider); const accounts=await provider.request({method:"eth_requestAccounts"}) as string[]; const from=accounts[0];
     if(!from||from.toLowerCase()!==workflow.payer.toLowerCase())throw new Error("Connected wallet does not match the wallet bound to this intent.");
-    const payout=workflow.payouts[0]; const transactionHash=await window.ethereum.request({method:"eth_sendTransaction",params:[{from,to:payout.recipient_address,value:monToWeiHex(payout.amount)}]}) as string;
+    const payout=workflow.payouts[0]; const transactionHash=await provider.request({method:"eth_sendTransaction",params:[{from,to:payout.recipient_address,value:monToWeiHex(payout.amount)}]}) as string;
     let lastError:Error|undefined;
     for(let attempt=0;attempt<30;attempt+=1){try{setTask(await confirmFlowTransaction(task.id,transactionHash));return}catch(reason){lastError=reason instanceof Error?reason:new Error("Receipt verification failed.");if(!/not been mined|not known/i.test(lastError.message))throw lastError;await new Promise(resolve=>window.setTimeout(resolve,2000));}}
     throw lastError??new Error("Transaction was broadcast but not confirmed before the timeout. Retry receipt verification without paying again.");

@@ -10,7 +10,7 @@ General AI assistants can recommend actions, but recommendations are not complet
 
 ## Product vision
 
-DONADS aims for a minimal, playful Grok Bot-style experience with the DONADS mascot, while being crypto-first and Monad-native. A user states a goal; Operator divides it into safe specialist steps, executes independent work in parallel, pauses at financial or external-write boundaries, and preserves the task history and evidence.
+DONADS uses one minimal, playful task surface with the DONADS mascot while remaining crypto-first and Monad-native. Users do not open separate bot pages: they state a goal once, deterministic routing selects the required specialists, Operator coordinates dependent work, the loading interface names the active stage, and the conversation preserves results and evidence. The specialist catalog is informational and explains each capability and what to ask.
 
 The target platform includes persistent cloud workers, authenticated browsers, connected applications, cross-bot coordination, learned routines, and long-running background work. Those are target capabilities, not claims about the current build. No measured benchmark currently proves DONADS faster or better than Grok Bot.
 
@@ -80,12 +80,12 @@ Completed specialist results can be exported as structured PDF reports. Reports 
 
 ## Credentials and service requirements
 
-The current local/testnet build requires **no paid API key**. It uses the public Monad Testnet RPC, the user's browser wallet, deterministic specialists, and local browser PDF generation.
+The current local/testnet build requires **no paid API key**. It uses the public Monad Testnet RPC, the user's wallet, deterministic specialists, and local browser PDF generation. A free public Reown project ID enables the WalletConnect wallet chooser and QR modal; it is client configuration, not a secret.
 
 | Capability | Required now | Production requirement |
 | --- | --- | --- |
 | Monad reads and receipt verification | Public `MONAD_RPC_URL`; no key | Dedicated authenticated Monad RPC endpoint with quotas and failover |
-| Wallet authentication and payments | User-controlled EVM wallet; no application key | Same non-custodial model, plus audited policy-vault address for bounded automation |
+| Wallet authentication and payments | User-controlled EVM wallet plus public `NEXT_PUBLIC_REOWN_PROJECT_ID` | Same non-custodial model, plus audited policy-vault address for bounded automation |
 | PDF reports | No key | No key unless reports are later archived to external storage |
 | Public web deployment | One Vercel project and a Marketplace Postgres integration | Deployment/database credentials are injected by Vercel and never committed |
 | Real product orders | Not configured | Documented crypto merchant API URL/token and webhook verification secret |
@@ -99,7 +99,7 @@ Do not add unused provider secrets. Select a provider only when its connector is
 
 ## Local setup
 
-Requirements: Node.js, npm, a Postgres connection string, and an EVM browser wallet configured for Monad Testnet. Rust is optional unless running the reference implementation tests.
+Requirements: Node.js, npm, a Postgres connection string, and a free Reown project ID. WalletConnect supports mobile/QR wallets; an injected EVM browser wallet is the fallback when Reown is not configured. Rust is optional unless running the reference implementation tests.
 
 ```powershell
 Set-Location frontend
@@ -108,7 +108,7 @@ npm install
 npm run dev
 ```
 
-Set `DATABASE_URL` in `frontend/.env.local`, open `http://localhost:3000`, select **Sign in**, and approve the message signature. This signature is free and cannot move funds. The UI and API share the same local origin.
+Set `DATABASE_URL` and `NEXT_PUBLIC_REOWN_PROJECT_ID` in `frontend/.env.local`, open `http://localhost:3000`, select **Connect wallet**, and approve the message signature. The wallet chooser supports WalletConnect QR sessions. This signature is free and cannot move funds. The UI and API share the same local origin.
 
 Configuration is documented in `.env.example`. Production credentials must use a secret manager/KMS reference; never commit wallet keys, browser profiles, OAuth tokens, or merchant credentials.
 

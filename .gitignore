@@ -9,6 +9,8 @@
 /contracts/build/
 /contracts/out/
 /contracts/cache/
+/contracts/hardhat-cache/
+/contracts/hardhat-artifacts/
 
 # Raw local references are not shipped; optimized product assets live in frontend/public/brand.
 /WhatsApp Image *.jpeg

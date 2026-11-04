@@ -86,4 +86,14 @@ npm run lint
 npm run build
 ```
 
+Contract checks:
+
+```powershell
+Set-Location contracts
+npm install
+npm run compile
+npm test
+npm audit
+```
+
 Unit-test doubles are retained inside test files. They verify failure handling and UI behavior; they are not product execution paths and never create user-visible transaction or order claims.

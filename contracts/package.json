@@ -1,0 +1,12 @@
+{
+  "name": "donads-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "solcjs --bin --abi --base-path . --include-path . -o build src/DonadsPolicyVault.sol",
+    "test:compile": "solcjs --bin --base-path . --include-path . -o build test/DonadsPolicyVault.t.sol"
+  },
+  "devDependencies": {
+    "solc": "0.8.24"
+  }
+}

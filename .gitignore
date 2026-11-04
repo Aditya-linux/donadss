@@ -1,0 +1,19 @@
+/target
+/.env
+/data
+*.log
+*.bak
+/.brand-preview/
+/.superstack/
+/contracts/node_modules/
+/contracts/build/
+/contracts/out/
+/contracts/cache/
+
+# Raw local references are not shipped; optimized product assets live in frontend/public/brand.
+/WhatsApp Image *.jpeg
+/WhatsApp Video *.mp4
+
+# Superseded local planning and phase-review artifacts are kept outside the active repository.
+/docs/
+/plan.txt

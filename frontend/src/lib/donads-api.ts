@@ -122,6 +122,9 @@ export type CommerceWorkflow = {
   state:
     | "awaiting_approval"
     | "authorized"
+    | "invoice_created"
+    | "payment_submitted"
+    | "completed"
     | "rejected"
     ;
   selected_offer: CommerceOffer;
@@ -131,6 +134,26 @@ export type CommerceWorkflow = {
   asset: string;
   approval_id: string | null;
   approved_at_ms: number | null;
+  merchant_invoice?: {
+    provider: string;
+    invoice_id: string;
+    checkout_url: string;
+    asset: string;
+    amount_atomic: string;
+    expires_at_ms: number | null;
+  } | null;
+  payment_proof?: {
+    invoice_id: string;
+    transaction_hash: string;
+    confirmed_at_ms: number;
+  } | null;
+  order_receipt?: {
+    provider: string;
+    order_id: string;
+    receipt_url: string;
+    status: string;
+    verified_at_ms: number;
+  } | null;
   audit_history: Array<{
     sequence: number;
     event: string;
@@ -250,7 +273,7 @@ export type CommerceCompletedTask = TaskBase & {
     summary: string;
     data: {
       workflow: CommerceWorkflow;
-      agent_version: "commerce-crypto-intent-v1";
+      agent_version: "commerce-crypto-order-v2";
       execution_available: false;
       blocked_reason: string;
     };
@@ -265,7 +288,7 @@ export type OperatorCompletedTask = TaskBase & {
     summary: string;
     data: {
       workflow: OperatorWorkflow;
-      agent_version: "operator-orchestration-v1";
+      agent_version: "operator-orchestration-v2";
       external_actions: false;
     };
     latency_ms: number;
@@ -551,6 +574,16 @@ export type OperatorTaskInput = {
   steps: OperatorStepInput[];
 };
 
+export type OperatorRoutine = {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+  input: OperatorTaskInput;
+};
+
 export async function createOperatorTask(
   input: OperatorTaskInput,
   signal?: AbortSignal,
@@ -584,6 +617,38 @@ export async function applyOperatorAction(
     },
   );
   return readJson<OperatorCompletedTask>(response);
+}
+
+export async function captureOperatorRoutine(
+  taskId: string,
+  input: { id: string; name: string; description: string },
+  signal?: AbortSignal,
+): Promise<OperatorRoutine> {
+  const response = await fetch(`${API_URL}/v1/tasks/${taskId}/routine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  return readJson<OperatorRoutine>(response);
+}
+
+export async function listOperatorRoutines(
+  signal?: AbortSignal,
+): Promise<OperatorRoutine[]> {
+  const response = await fetch(`${API_URL}/v1/routines`, { signal });
+  return readJson<OperatorRoutine[]>(response);
+}
+
+export async function runOperatorRoutine(
+  routineId: string,
+  signal?: AbortSignal,
+): Promise<Task> {
+  const response = await fetch(
+    `${API_URL}/v1/routines/${encodeURIComponent(routineId)}/runs`,
+    { method: "POST", signal },
+  );
+  return readJson<Task>(response);
 }
 
 export async function waitForOperator(

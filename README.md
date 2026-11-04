@@ -13,10 +13,10 @@ The current repository can request a user-approved native MON transaction throug
 | Bot | Working now | Still missing |
 | --- | --- | --- |
 | Scout | Fetches up to five supplied public URLs, extracts evidence, and returns citations | Live search provider, browser navigation, product discovery, authenticated sessions |
-| Commerce | Validates user-supplied crypto offers, selects an in-stock offer within an atomic-unit budget, and binds approval to the exact asset and amount | Crypto merchant adapter, wallet request, transaction receipt verification, merchant order receipt |
+| Commerce | Validates user-supplied crypto offers, binds approval to the exact asset and amount, and enforces the verified invoice → chain payment → merchant order-receipt lifecycle | Authorized physical-product merchant adapter, authenticated checkout session, refunds and delivery recovery |
 | Growth | Creates deterministic campaign drafts from a stored brand profile and cited evidence | LLM-backed drafting, Telegram/Gmail/X publishing with approval and verified message IDs |
 | Flow | Connects an injected wallet, enforces Monad Testnet, broadcasts an exact native MON transfer, and verifies its mined receipt server-side | Policy-vault enforcement, delegated KMS signer, ERC-20 transfers, replacement and recovery UI |
-| Operator | Validates dependency graphs, runs approved specialist steps, persists state, supports cancellation and retry | Sentinel pre-flight gate, durable production queue, real external-action recovery |
+| Operator | Validates dependency graphs, runs independent steps in parallel, persists child tasks, supports cancellation/retry, and saves successful workflows as versioned routines | Sentinel pre-flight gate, production queue, schedules/triggers, isolated cloud workers and external-action recovery |
 | Sentinel | Provides clickable bytecode triage and mandatory Flow pre-flight checks for network, sender, recipient, asset, and exact amount | Merchant/domain allowlists, policy-vault state checks, prompt-injection defenses |
 
 The ten-bot target has not been reached. Six bots exist; four additional bots must be specified and approved before implementation.
@@ -39,6 +39,7 @@ A purchase is complete only after the above transaction proof **and** a real mer
 - Next.js interface for specialist workspaces and approval boundaries.
 - Monad testnet is the only permitted execution target until the security and recovery test suite passes.
 - JSON persistence is development-only and must be replaced with a transactional database before production.
+- Saved routines always create a fresh reviewable plan; they never reuse a wallet signature or silently repeat a purchase.
 
 ## Run locally
 

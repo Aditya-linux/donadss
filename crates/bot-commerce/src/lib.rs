@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use url::Url;
 
-pub const AGENT_VERSION: &str = "commerce-crypto-intent-v1";
+pub const AGENT_VERSION: &str = "commerce-crypto-order-v2";
 const MAX_OFFERS: usize = 10;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,7 +39,36 @@ pub struct ProductOffer {
 pub enum CommerceState {
     AwaitingApproval,
     Authorized,
+    InvoiceCreated,
+    PaymentSubmitted,
+    Completed,
     Rejected,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MerchantInvoice {
+    pub provider: String,
+    pub invoice_id: String,
+    pub checkout_url: String,
+    pub asset: String,
+    pub amount_atomic: String,
+    pub expires_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MerchantPaymentProof {
+    pub invoice_id: String,
+    pub transaction_hash: String,
+    pub confirmed_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MerchantOrderReceipt {
+    pub provider: String,
+    pub order_id: String,
+    pub receipt_url: String,
+    pub status: String,
+    pub verified_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -62,6 +91,12 @@ pub struct CommerceWorkflow {
     pub asset: String,
     pub approval_id: Option<String>,
     pub approved_at_ms: Option<u64>,
+    #[serde(default)]
+    pub merchant_invoice: Option<MerchantInvoice>,
+    #[serde(default)]
+    pub payment_proof: Option<MerchantPaymentProof>,
+    #[serde(default)]
+    pub order_receipt: Option<MerchantOrderReceipt>,
     pub audit_history: Vec<CommerceAuditEvent>,
 }
 
@@ -140,6 +175,9 @@ pub fn prepare_workflow(
         budget_atomic: input.budget_atomic.clone(),
         approval_id: None,
         approved_at_ms: None,
+        merchant_invoice: None,
+        payment_proof: None,
+        order_receipt: None,
         audit_history: vec![CommerceAuditEvent {
             sequence: 1,
             event: "offer_selected".into(),
@@ -148,6 +186,91 @@ pub fn prepare_workflow(
             at_ms: unix_time_ms(),
         }],
     })
+}
+
+pub fn record_verified_invoice(
+    workflow: &mut CommerceWorkflow,
+    invoice: MerchantInvoice,
+) -> Result<(), CommerceTransitionError> {
+    require_state(workflow, CommerceState::Authorized)?;
+    if invoice.provider.trim().is_empty() || invoice.invoice_id.trim().is_empty() {
+        return Err(CommerceTransitionError::InvalidAction(
+            "verified invoice requires a provider and invoice id".into(),
+        ));
+    }
+    validate_url(&invoice.checkout_url, "invoice checkout URL")
+        .map_err(|error| CommerceTransitionError::InvalidAction(error.to_string()))?;
+    if !invoice.asset.eq_ignore_ascii_case(&workflow.asset)
+        || invoice.amount_atomic != workflow.total_atomic
+    {
+        return Err(CommerceTransitionError::InvalidAction(
+            "merchant invoice does not match the approved asset and amount".into(),
+        ));
+    }
+    workflow.merchant_invoice = Some(invoice);
+    workflow.state = CommerceState::InvoiceCreated;
+    push_audit(
+        workflow,
+        "merchant_invoice_verified",
+        "Merchant adapter created and read back an exact invoice.",
+    );
+    Ok(())
+}
+
+pub fn record_verified_payment(
+    workflow: &mut CommerceWorkflow,
+    proof: MerchantPaymentProof,
+) -> Result<(), CommerceTransitionError> {
+    require_state(workflow, CommerceState::InvoiceCreated)?;
+    let invoice = workflow.merchant_invoice.as_ref().ok_or_else(|| {
+        CommerceTransitionError::InvalidAction("merchant invoice is missing".into())
+    })?;
+    if proof.invoice_id != invoice.invoice_id
+        || proof.transaction_hash.len() != 66
+        || !proof.transaction_hash.starts_with("0x")
+        || !proof.transaction_hash[2..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(CommerceTransitionError::InvalidAction(
+            "payment proof must match the invoice and contain a transaction hash".into(),
+        ));
+    }
+    workflow.payment_proof = Some(proof);
+    workflow.state = CommerceState::PaymentSubmitted;
+    push_audit(
+        workflow,
+        "merchant_payment_verified",
+        "Merchant adapter and chain receipt agree that the invoice was paid.",
+    );
+    Ok(())
+}
+
+pub fn record_verified_order(
+    workflow: &mut CommerceWorkflow,
+    receipt: MerchantOrderReceipt,
+) -> Result<(), CommerceTransitionError> {
+    require_state(workflow, CommerceState::PaymentSubmitted)?;
+    if receipt.provider.trim().is_empty() || receipt.order_id.trim().is_empty() {
+        return Err(CommerceTransitionError::InvalidAction(
+            "order receipt requires a provider and order id".into(),
+        ));
+    }
+    validate_url(&receipt.receipt_url, "merchant receipt URL")
+        .map_err(|error| CommerceTransitionError::InvalidAction(error.to_string()))?;
+    if !matches!(receipt.status.as_str(), "confirmed" | "fulfilled") {
+        return Err(CommerceTransitionError::InvalidAction(
+            "merchant order is not confirmed or fulfilled".into(),
+        ));
+    }
+    workflow.order_receipt = Some(receipt);
+    workflow.state = CommerceState::Completed;
+    push_audit(
+        workflow,
+        "merchant_order_verified",
+        "Merchant order id and receipt were verified; purchase is complete.",
+    );
+    Ok(())
 }
 
 pub fn authorize(
@@ -287,7 +410,10 @@ fn unix_time_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Commerce, CommerceState, authorize};
+    use super::{
+        Commerce, CommerceState, MerchantInvoice, MerchantOrderReceipt, MerchantPaymentProof,
+        authorize, record_verified_invoice, record_verified_order, record_verified_payment,
+    };
     use donads_core::{Bot, Task, TaskInput};
     use serde_json::json;
     fn task() -> Task {
@@ -313,5 +439,57 @@ mod tests {
         assert!(authorize(&mut workflow, "approval-1".into(), "1").is_err());
         authorize(&mut workflow, "approval-1".into(), "2500000000000000000").expect("approval");
         assert_eq!(workflow.state, CommerceState::Authorized);
+    }
+
+    #[tokio::test]
+    async fn completion_requires_matching_invoice_payment_and_order_receipt() {
+        let result = Commerce.execute(&task()).await.expect("intent");
+        let mut workflow =
+            serde_json::from_value(result.data["workflow"].clone()).expect("workflow");
+        authorize(&mut workflow, "approval-1".into(), "2500000000000000000").expect("approval");
+        record_verified_invoice(
+            &mut workflow,
+            MerchantInvoice {
+                provider: "merchant-api".into(),
+                invoice_id: "invoice-1".into(),
+                checkout_url: "https://shop.example/invoices/1".into(),
+                asset: "MON".into(),
+                amount_atomic: "2500000000000000000".into(),
+                expires_at_ms: None,
+            },
+        )
+        .expect("invoice");
+        assert!(
+            record_verified_payment(
+                &mut workflow,
+                MerchantPaymentProof {
+                    invoice_id: "wrong".into(),
+                    transaction_hash: format!("0x{}", "1".repeat(64)),
+                    confirmed_at_ms: 1,
+                },
+            )
+            .is_err()
+        );
+        record_verified_payment(
+            &mut workflow,
+            MerchantPaymentProof {
+                invoice_id: "invoice-1".into(),
+                transaction_hash: format!("0x{}", "1".repeat(64)),
+                confirmed_at_ms: 1,
+            },
+        )
+        .expect("payment");
+        record_verified_order(
+            &mut workflow,
+            MerchantOrderReceipt {
+                provider: "merchant-api".into(),
+                order_id: "order-1".into(),
+                receipt_url: "https://shop.example/orders/1".into(),
+                status: "confirmed".into(),
+                verified_at_ms: 2,
+            },
+        )
+        .expect("order");
+        assert_eq!(workflow.state, CommerceState::Completed);
     }
 }

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use uuid::Uuid;
 
-pub const AGENT_VERSION: &str = "operator-orchestration-v1";
+pub const AGENT_VERSION: &str = "operator-orchestration-v2";
 const MAX_STEPS: usize = 10;
 const ALLOWED_BOTS: [&str; 4] = ["scout", "growth", "flow", "commerce"];
 
@@ -289,20 +289,30 @@ pub fn apply_action(
 
 impl OperatorWorkflow {
     #[must_use]
-    pub fn next_runnable_step(&self) -> Option<usize> {
+    pub fn runnable_steps(&self) -> Vec<usize> {
         let completed: HashSet<_> = self
             .steps
             .iter()
             .filter(|step| step.status == OperatorStepStatus::Completed)
             .map(|step| step.id.as_str())
             .collect();
-        self.steps.iter().position(|step| {
-            step.status == OperatorStepStatus::Pending
-                && step
-                    .depends_on
-                    .iter()
-                    .all(|dependency| completed.contains(dependency.as_str()))
-        })
+        self.steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                (step.status == OperatorStepStatus::Pending
+                    && step
+                        .depends_on
+                        .iter()
+                        .all(|dependency| completed.contains(dependency.as_str())))
+                .then_some(index)
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn next_runnable_step(&self) -> Option<usize> {
+        self.runnable_steps().into_iter().next()
     }
 
     pub fn mark_running(&mut self, index: usize, task_id: Uuid) {
@@ -583,5 +593,26 @@ mod tests {
         let mut invalid = task();
         invalid.input["steps"][0]["depends_on"] = json!(["campaign"]);
         assert!(Operator.execute(&invalid).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn exposes_independent_steps_as_one_parallel_wave() {
+        let mut parallel = task();
+        parallel.input["steps"] = json!([
+            {"id":"research-a","title":"Research A","bot":"scout","prompt":"Research A","input":{"sources":["https://example.com/a"]},"depends_on":[]},
+            {"id":"research-b","title":"Research B","bot":"scout","prompt":"Research B","input":{"sources":["https://example.com/b"]},"depends_on":[]},
+            {"id":"campaign","title":"Campaign","bot":"growth","prompt":"Create drafts","input":{},"depends_on":["research-a","research-b"]}
+        ]);
+        let result = Operator.execute(&parallel).await.expect("parallel plan");
+        let mut workflow: OperatorWorkflow =
+            serde_json::from_value(result.data["workflow"].clone()).expect("workflow");
+        assert_eq!(workflow.runnable_steps(), vec![0, 1]);
+        workflow.mark_running(0, uuid::Uuid::new_v4());
+        workflow.mark_running(1, uuid::Uuid::new_v4());
+        assert!(workflow.runnable_steps().is_empty());
+        workflow.mark_completed(0, "a".into());
+        assert!(workflow.runnable_steps().is_empty());
+        workflow.mark_completed(1, "b".into());
+        assert_eq!(workflow.runnable_steps(), vec![2]);
     }
 }

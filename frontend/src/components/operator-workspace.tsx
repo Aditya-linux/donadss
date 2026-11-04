@@ -2,6 +2,7 @@
 
 import {
   ArrowRight,
+  BookmarkCheck,
   CalendarClock,
   Check,
   CircleDot,
@@ -22,6 +23,7 @@ import {
   OperatorCompletedTask,
   OperatorStepInput,
   applyOperatorAction,
+  captureOperatorRoutine,
   createOperatorTask,
   extractSourceUrls,
   waitForOperator,
@@ -51,12 +53,16 @@ function PlanView({
   onStart,
   onCancel,
   onRetry,
+  onSaveRoutine,
+  routineSaved,
 }: {
   task: OperatorCompletedTask;
   working: boolean;
   onStart: () => void;
   onCancel: () => void;
   onRetry: () => void;
+  onSaveRoutine: () => void;
+  routineSaved: string | null;
 }) {
   const workflow = task.status.data.workflow;
   const terminal = ["completed", "partial_failure", "failed", "cancelled"].includes(
@@ -85,7 +91,7 @@ function PlanView({
           </div>
           <p className="max-w-prose text-sm leading-6 text-muted-foreground">
             {workflow.target_date ? `Target ${workflow.target_date}. ` : ""}
-            Dependencies run in order. Completed work is retained if another step fails.
+            Independent steps run in parallel; dependent steps wait for their requirements. Completed work is retained if another step fails.
           </p>
         </section>
 
@@ -156,6 +162,12 @@ function PlanView({
               <RotateCcw className="size-4" aria-hidden="true" />Retry incomplete steps
             </button>
           ) : null}
+          {workflow.state === "completed" ? (
+            <button type="button" disabled={working || Boolean(routineSaved)} onClick={onSaveRoutine} className="flex min-h-11 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">
+              <BookmarkCheck className="size-4" aria-hidden="true" />
+              {routineSaved ?? "Save as routine"}
+            </button>
+          ) : null}
         </div>
       </div>
       {terminal ? <FeedbackControls taskId={task.id} /> : null}
@@ -184,6 +196,7 @@ export function OperatorWorkspace() {
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [routineSaved, setRoutineSaved] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
 
   function buildSteps(): OperatorStepInput[] {
@@ -327,12 +340,36 @@ export function OperatorWorkspace() {
     }
   }
 
+  async function saveRoutine() {
+    if (!task || task.status.data.workflow.state !== "completed") return;
+    setWorking(true);
+    setError(null);
+    const name = task.status.data.workflow.objective.trim();
+    const id = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40) || "saved-routine";
+    try {
+      const routine = await captureOperatorRoutine(task.id, {
+        id,
+        name: name.slice(0, 100),
+        description: "Saved from a successfully completed DONADS Operator workflow.",
+      });
+      setRoutineSaved(`Routine saved · v${routine.version}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save the routine.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   if (task) {
     return (
       <>
         {error ? <div role="alert" className="mx-auto mt-4 flex w-[calc(100%-2rem)] max-w-4xl items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm"><span>{error}</span><button type="button" onClick={() => setError(null)} className="min-h-10 rounded-lg px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">Dismiss</button></div> : null}
         {working && progress ? <div className="mx-auto mt-3 w-[calc(100%-2rem)] max-w-4xl"><MascotLoader label={progress} compact /></div> : null}
-        <PlanView task={task} working={working} onStart={() => void run("start")} onCancel={() => void cancel()} onRetry={() => void run("retry_failed")} />
+        <PlanView task={task} working={working} onStart={() => void run("start")} onCancel={() => void cancel()} onRetry={() => void run("retry_failed")} onSaveRoutine={() => void saveRoutine()} routineSaved={routineSaved} />
       </>
     );
   }

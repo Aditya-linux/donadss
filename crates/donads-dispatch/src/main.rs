@@ -17,8 +17,9 @@ use bot_flow::{
 };
 use bot_growth::{BrandProfile, Growth};
 use bot_operator::{
-    Operator, OperatorAction, OperatorState, OperatorStep, OperatorStepStatus,
-    OperatorTransitionError, OperatorWorkflow, apply_action as apply_operator_action,
+    Operator, OperatorAction, OperatorInput, OperatorState, OperatorStep, OperatorStepInput,
+    OperatorStepStatus, OperatorTransitionError, OperatorWorkflow,
+    apply_action as apply_operator_action,
 };
 use bot_scout::Scout;
 use bot_sentinel::{NativeTransferPolicyRequest, Sentinel, SentinelPolicyGuard};
@@ -47,6 +48,74 @@ struct PersistentProfileStore {
     profiles: Arc<RwLock<HashMap<String, BrandProfile>>>,
     path: Arc<PathBuf>,
     save_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct OperatorRoutine {
+    id: String,
+    name: String,
+    description: String,
+    version: u32,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+    input: OperatorInput,
+}
+
+#[derive(Clone)]
+struct PersistentRoutineStore {
+    routines: Arc<RwLock<HashMap<String, OperatorRoutine>>>,
+    path: Arc<PathBuf>,
+    save_lock: Arc<Mutex<()>>,
+}
+
+impl PersistentRoutineStore {
+    async fn load(path: PathBuf) -> anyhow::Result<Self> {
+        let routines = match tokio::fs::read(&path).await {
+            Ok(bytes) => serde_json::from_slice::<Vec<OperatorRoutine>>(&bytes)
+                .with_context(|| format!("could not parse routine store at {}", path.display()))?
+                .into_iter()
+                .map(|routine| (routine.id.clone(), routine))
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(error) => {
+                return Err(error).with_context(|| format!("could not read {}", path.display()));
+            }
+        };
+        Ok(Self {
+            routines: Arc::new(RwLock::new(routines)),
+            path: Arc::new(path),
+            save_lock: Arc::new(Mutex::new(())),
+        })
+    }
+
+    async fn list(&self) -> Vec<OperatorRoutine> {
+        let mut routines: Vec<_> = self.routines.read().await.values().cloned().collect();
+        routines.sort_by(|left, right| left.name.cmp(&right.name));
+        routines
+    }
+
+    async fn get(&self, id: &str) -> Option<OperatorRoutine> {
+        self.routines.read().await.get(id).cloned()
+    }
+
+    async fn save(&self, mut routine: OperatorRoutine) -> anyhow::Result<OperatorRoutine> {
+        let mut routines = self.routines.write().await;
+        if let Some(existing) = routines.get(&routine.id) {
+            routine.version = existing.version.saturating_add(1);
+            routine.created_at_ms = existing.created_at_ms;
+        }
+        routine.updated_at_ms = unix_time_ms();
+        routines.insert(routine.id.clone(), routine.clone());
+        drop(routines);
+        self.persist().await?;
+        Ok(routine)
+    }
+
+    async fn persist(&self) -> anyhow::Result<()> {
+        let _save_guard = self.save_lock.lock().await;
+        let snapshot = self.list().await;
+        persist_json(self.path.as_ref(), &snapshot).await
+    }
 }
 
 impl PersistentProfileStore {
@@ -532,6 +601,7 @@ struct AppState {
     bots: Arc<BotMap>,
     tasks: PersistentTaskStore,
     profiles: PersistentProfileStore,
+    routines: PersistentRoutineStore,
     chain: ChainClient,
 }
 
@@ -548,6 +618,14 @@ struct HealthResponse {
 struct FeedbackInput {
     rating: u8,
     note: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RoutineCaptureInput {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Serialize)]
@@ -725,10 +803,14 @@ async fn main() -> anyhow::Result<()> {
     let profile_path = env::var("DONADS_PROFILE_STORE")
         .map_or_else(|_| PathBuf::from("data/profiles.json"), PathBuf::from);
     let profiles = PersistentProfileStore::load(profile_path).await?;
+    let routine_path = env::var("DONADS_ROUTINE_STORE")
+        .map_or_else(|_| PathBuf::from("data/routines.json"), PathBuf::from);
+    let routines = PersistentRoutineStore::load(routine_path).await?;
     let state = AppState {
         bots: Arc::new(bots),
         tasks,
         profiles,
+        routines,
         chain,
     };
     let app = Router::new()
@@ -745,6 +827,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/tasks/{id}/commerce-actions", post(commerce_action))
         .route("/v1/tasks/{id}/operator-actions", post(operator_action))
+        .route("/v1/tasks/{id}/routine", post(capture_routine))
+        .route("/v1/routines", get(list_routines))
+        .route("/v1/routines/{id}/runs", post(run_routine))
         .route("/v1/brand-profiles", get(list_profiles))
         .route(
             "/v1/brand-profiles/{id}",
@@ -942,6 +1027,100 @@ async fn record_feedback(
         .map_err(ApiError::internal)
 }
 
+async fn list_routines(State(state): State<AppState>) -> Json<Vec<OperatorRoutine>> {
+    Json(state.routines.list().await)
+}
+
+async fn capture_routine(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Json(input): Json<RoutineCaptureInput>,
+) -> Result<(StatusCode, Json<OperatorRoutine>), ApiError> {
+    let id = input.id.trim();
+    if id.is_empty()
+        || id.len() > 40
+        || !id.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+    {
+        return Err(ApiError::bad_request(
+            "routine id must use 1-40 lowercase letters, numbers, or hyphens",
+        ));
+    }
+    let name = input.name.trim();
+    if name.is_empty() || name.len() > 100 {
+        return Err(ApiError::bad_request(
+            "routine name must contain between 1 and 100 characters",
+        ));
+    }
+    let description = input.description.trim();
+    if description.len() > 500 {
+        return Err(ApiError::bad_request(
+            "routine description must be 500 characters or fewer",
+        ));
+    }
+
+    let workflow = state
+        .tasks
+        .operator_workflow(task_id)
+        .await
+        .map_err(operator_api_error)?;
+    if workflow.state != OperatorState::Completed {
+        return Err(ApiError::conflict(
+            "only a successfully completed Operator workflow can become a routine",
+        ));
+    }
+    let operator_input = OperatorInput {
+        objective: workflow.objective,
+        target_date: workflow.target_date,
+        steps: workflow
+            .steps
+            .into_iter()
+            .map(|step| OperatorStepInput {
+                id: step.id,
+                title: step.title,
+                bot: step.bot,
+                prompt: step.prompt,
+                input: step.input,
+                depends_on: step.depends_on,
+            })
+            .collect(),
+    };
+    let now = unix_time_ms();
+    let routine = OperatorRoutine {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        description: description.to_owned(),
+        version: 1,
+        created_at_ms: now,
+        updated_at_ms: now,
+        input: operator_input,
+    };
+    state
+        .routines
+        .save(routine)
+        .await
+        .map(|saved| (StatusCode::CREATED, Json(saved)))
+        .map_err(ApiError::internal)
+}
+
+async fn run_routine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Task>), ApiError> {
+    let routine = state
+        .routines
+        .get(&id)
+        .await
+        .ok_or_else(|| ApiError::not_found("routine not found"))?;
+    let task_input = TaskInput {
+        prompt: routine.input.objective.clone(),
+        bot: Some("operator".into()),
+        input: serde_json::to_value(routine.input).map_err(ApiError::internal)?,
+    };
+    create_task(State(state), Json(task_input)).await
+}
+
 async fn flow_action(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -1128,7 +1307,6 @@ async fn operator_action(
     Ok(Json(task))
 }
 
-#[allow(clippy::too_many_lines)] // Keeping the child lifecycle in one routine makes its persistence order explicit.
 async fn run_operator(state: AppState, parent_id: Uuid) {
     loop {
         let workflow = match state.tasks.operator_workflow(parent_id).await {
@@ -1147,142 +1325,165 @@ async fn run_operator(state: AppState, parent_id: Uuid) {
         if workflow.state != OperatorState::Running {
             return;
         }
-        let Some(step_index) = workflow.next_runnable_step() else {
+        let runnable = workflow.runnable_steps();
+        if runnable.is_empty() {
             if let Err(error) = state.tasks.finalize_operator(parent_id).await {
                 error!(task_id = %parent_id, %error, "could not finalize Operator run");
             }
             return;
-        };
-        let step = workflow.steps[step_index].clone();
-        let Some(bot) = state.bots.get(&step.bot).cloned() else {
-            let message = format!("specialist '{}' is no longer registered", step.bot);
-            if let Err(error) = state
-                .tasks
-                .mark_operator_step_result(parent_id, step_index, Err(message))
-                .await
-            {
-                error!(task_id = %parent_id, %error, "could not record missing specialist");
-                return;
-            }
-            continue;
-        };
-        let child_input = materialize_operator_step_input(&state, &workflow, &step).await;
-        let child = Task::queued(
-            TaskInput {
-                prompt: step.prompt,
-                bot: Some(step.bot.clone()),
-                input: child_input,
-            },
-            step.bot,
-        );
-        if let Err(error) = state.tasks.insert(child.clone()).await {
-            let message = "Operator could not persist the child task.".to_owned();
-            error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist Operator child");
-            if let Err(record_error) = state
-                .tasks
-                .mark_operator_step_result(parent_id, step_index, Err(message))
-                .await
-            {
-                error!(task_id = %parent_id, %record_error, "could not record child persistence failure");
-            }
-            continue;
-        }
-        match state
-            .tasks
-            .mark_operator_step_running(parent_id, step_index, child.id)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                let _ = state
-                    .tasks
-                    .transition(
-                        child.id,
-                        TaskStatus::Failed {
-                            error: "Operator was cancelled before dispatch.".into(),
-                            latency_ms: 0,
-                        },
-                        "cancelled",
-                        "Child task was not dispatched because Operator was cancelled.",
-                    )
-                    .await;
-                continue;
-            }
-            Err(error) => {
-                error!(task_id = %parent_id, %error, "could not persist Operator step start");
-                return;
-            }
         }
 
-        let started = Instant::now();
+        let mut wave = tokio::task::JoinSet::new();
+        for step_index in runnable {
+            wave.spawn(run_operator_step(
+                state.clone(),
+                parent_id,
+                workflow.clone(),
+                step_index,
+            ));
+        }
+        while let Some(result) = wave.join_next().await {
+            if let Err(error) = result {
+                error!(task_id = %parent_id, %error, "Operator parallel step panicked");
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // The full child lifecycle remains together so every persistent transition is auditable.
+async fn run_operator_step(
+    state: AppState,
+    parent_id: Uuid,
+    workflow: OperatorWorkflow,
+    step_index: usize,
+) {
+    let step = workflow.steps[step_index].clone();
+    let Some(bot) = state.bots.get(&step.bot).cloned() else {
+        let message = format!("specialist '{}' is no longer registered", step.bot);
         if let Err(error) = state
             .tasks
-            .transition(
-                child.id,
-                TaskStatus::Running,
-                "running",
-                format!(
-                    "{} is executing an Operator child task.",
-                    bot.descriptor().name
-                ),
-            )
+            .mark_operator_step_result(parent_id, step_index, Err(message))
             .await
         {
-            error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not start Operator child");
+            error!(task_id = %parent_id, %error, "could not record missing specialist");
+        }
+        return;
+    };
+    let child_input = materialize_operator_step_input(&state, &workflow, &step).await;
+    let child = Task::queued(
+        TaskInput {
+            prompt: step.prompt,
+            bot: Some(step.bot.clone()),
+            input: child_input,
+        },
+        step.bot,
+    );
+    if let Err(error) = state.tasks.insert(child.clone()).await {
+        let message = "Operator could not persist the child task.".to_owned();
+        error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist Operator child");
+        if let Err(record_error) = state
+            .tasks
+            .mark_operator_step_result(parent_id, step_index, Err(message))
+            .await
+        {
+            error!(task_id = %parent_id, %record_error, "could not record child persistence failure");
+        }
+        return;
+    }
+    match state
+        .tasks
+        .mark_operator_step_running(parent_id, step_index, child.id)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
             let _ = state
                 .tasks
-                .mark_operator_step_result(
-                    parent_id,
-                    step_index,
-                    Err("Child task could not enter the running state.".into()),
+                .transition(
+                    child.id,
+                    TaskStatus::Failed {
+                        error: "Operator was cancelled before dispatch.".into(),
+                        latency_ms: 0,
+                    },
+                    "cancelled",
+                    "Child task was not dispatched because Operator was cancelled.",
                 )
                 .await;
-            continue;
-        }
-
-        let parent_result = match bot.execute(&child).await {
-            Ok(result) => {
-                let summary = result.summary.clone();
-                let status = TaskStatus::Completed {
-                    summary: result.summary,
-                    data: result.data,
-                    latency_ms: elapsed_ms(started),
-                };
-                if let Err(error) = state
-                    .tasks
-                    .transition(child.id, status, "completed", summary.clone())
-                    .await
-                {
-                    error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist completed Operator child");
-                    Err("Child result could not be persisted.".into())
-                } else {
-                    Ok(summary)
-                }
-            }
-            Err(execution_error) => {
-                let message = execution_error.to_string();
-                let status = TaskStatus::Failed {
-                    error: message.clone(),
-                    latency_ms: elapsed_ms(started),
-                };
-                if let Err(error) = state
-                    .tasks
-                    .transition(child.id, status, "failed", message.clone())
-                    .await
-                {
-                    error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist failed Operator child");
-                }
-                Err(message)
-            }
-        };
-        if let Err(error) = state
-            .tasks
-            .mark_operator_step_result(parent_id, step_index, parent_result)
-            .await
-        {
-            error!(task_id = %parent_id, %error, "could not persist Operator step result");
             return;
         }
+        Err(error) => {
+            error!(task_id = %parent_id, %error, "could not persist Operator step start");
+            return;
+        }
+    }
+
+    let started = Instant::now();
+    if let Err(error) = state
+        .tasks
+        .transition(
+            child.id,
+            TaskStatus::Running,
+            "running",
+            format!(
+                "{} is executing an Operator child task.",
+                bot.descriptor().name
+            ),
+        )
+        .await
+    {
+        error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not start Operator child");
+        let _ = state
+            .tasks
+            .mark_operator_step_result(
+                parent_id,
+                step_index,
+                Err("Child task could not enter the running state.".into()),
+            )
+            .await;
+        return;
+    }
+
+    let parent_result = match bot.execute(&child).await {
+        Ok(result) => {
+            let summary = result.summary.clone();
+            let status = TaskStatus::Completed {
+                summary: result.summary,
+                data: result.data,
+                latency_ms: elapsed_ms(started),
+            };
+            if let Err(error) = state
+                .tasks
+                .transition(child.id, status, "completed", summary.clone())
+                .await
+            {
+                error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist completed Operator child");
+                Err("Child result could not be persisted.".into())
+            } else {
+                Ok(summary)
+            }
+        }
+        Err(execution_error) => {
+            let message = execution_error.to_string();
+            let status = TaskStatus::Failed {
+                error: message.clone(),
+                latency_ms: elapsed_ms(started),
+            };
+            if let Err(error) = state
+                .tasks
+                .transition(child.id, status, "failed", message.clone())
+                .await
+            {
+                error!(task_id = %parent_id, child_task_id = %child.id, %error, "could not persist failed Operator child");
+            }
+            Err(message)
+        }
+    };
+    if let Err(error) = state
+        .tasks
+        .mark_operator_step_result(parent_id, step_index, parent_result)
+        .await
+    {
+        error!(task_id = %parent_id, %error, "could not persist Operator step result");
     }
 }
 
@@ -1563,13 +1764,17 @@ mod tests {
 
     use bot_flow::{Flow, WorkflowAction};
     use bot_growth::BrandProfile;
-    use bot_operator::{Operator, OperatorAction, OperatorState, OperatorStepStatus};
+    use bot_operator::{
+        Operator, OperatorAction, OperatorInput, OperatorState, OperatorStepInput,
+        OperatorStepStatus,
+    };
     use donads_core::{Bot, Task, TaskFeedback, TaskInput, TaskStatus};
     use serde_json::{Value, json};
     use uuid::Uuid;
 
     use super::{
-        PersistentProfileStore, PersistentTaskStore, materialize_growth_evidence, route_task,
+        OperatorRoutine, PersistentProfileStore, PersistentRoutineStore, PersistentTaskStore,
+        materialize_growth_evidence, route_task,
     };
 
     fn temporary_store_path() -> PathBuf {
@@ -1750,6 +1955,48 @@ mod tests {
             .expect("profile store should reload");
         assert_eq!(
             reloaded.get("donads").await.map(|profile| profile.version),
+            Some(2)
+        );
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn operator_routines_are_versioned_and_survive_reload() {
+        let path = temporary_store_path();
+        let store = PersistentRoutineStore::load(path.clone())
+            .await
+            .expect("routine store should load");
+        let routine = OperatorRoutine {
+            id: "research-draft".into(),
+            name: "Research and draft".into(),
+            description: "Reusable approved workflow".into(),
+            version: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            input: OperatorInput {
+                objective: "Research and draft".into(),
+                target_date: None,
+                steps: vec![OperatorStepInput {
+                    id: "research".into(),
+                    title: "Research".into(),
+                    bot: "scout".into(),
+                    prompt: "Review source".into(),
+                    input: json!({"sources": ["https://example.com"]}),
+                    depends_on: Vec::new(),
+                }],
+            },
+        };
+        assert_eq!(store.save(routine.clone()).await.expect("save").version, 1);
+        assert_eq!(store.save(routine).await.expect("update").version, 2);
+
+        let reloaded = PersistentRoutineStore::load(path.clone())
+            .await
+            .expect("routine store should reload");
+        assert_eq!(
+            reloaded
+                .get("research-draft")
+                .await
+                .map(|routine| routine.version),
             Some(2)
         );
         let _ = tokio::fs::remove_file(path).await;

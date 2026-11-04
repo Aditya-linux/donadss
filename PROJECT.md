@@ -14,10 +14,10 @@ DONADS is a crypto-native agent execution system for Monad. It coordinates bound
 ## Current specialists
 
 1. Scout — supplied-source research and citations.
-2. Commerce — crypto merchant offer selection and exact purchase authorization.
+2. Commerce — exact purchase authorization plus verified merchant invoice, payment, and order-receipt lifecycle.
 3. Growth — brand-constrained campaign drafts.
 4. Flow — wallet-approved native MON execution and RPC receipt verification.
-5. Operator — dependency-aware persistent orchestration.
+5. Operator — persistent orchestration with parallel dependency waves and versioned reusable routines.
 6. Sentinel — bytecode risk analysis plus mandatory native-MON Flow policy checks.
 
 The current interface contains six specialists. The former ten-chain-bot concept is retained only as historical product exploration; it is not the active implementation contract. Four future bot slots remain undefined until the user approves each bot.

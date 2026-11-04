@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Task } from "@/lib/donads-api";
-import { missionStateForTask, transactionIntentForTask } from "@/lib/missions";
+import { missionStateForTask, transactionIntentForTask, transactionIntentsForTask } from "@/lib/missions";
 
 function flowTask(state: "awaiting_approval" | "authorized" | "submitted" | "confirmed" | "rejected"): Task {
   return {
@@ -43,5 +43,15 @@ describe("Mission projection", () => {
       calldata: "0x", idempotency_key: "flow:00000000-0000-4000-8000-000000000002",
     });
     expect(intent?.calldata_hash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  it("projects every batch payout into an independently idempotent intent", () => {
+    const task = flowTask("awaiting_approval");
+    if (task.status.state !== "completed" || task.bot !== "flow") throw new Error("Unexpected fixture.");
+    task.status.data.workflow.payouts.push({ recipient_name: "Second", recipient_address: "0x3333333333333333333333333333333333333333", asset: "MON", amount: "1", milestone: "Test", deadline: null });
+    const intents = transactionIntentsForTask(task);
+    expect(intents).toHaveLength(2);
+    expect(new Set(intents.map((intent) => intent.id)).size).toBe(2);
+    expect(intents.map((intent) => intent.idempotency_key)).toEqual(["flow:00000000-0000-4000-8000-000000000002", "flow:00000000-0000-4000-8000-000000000002:1"]);
   });
 });

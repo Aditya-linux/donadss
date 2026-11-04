@@ -21,11 +21,12 @@ export function pendingApprovalForTask(task: Task, now = Date.now()): PendingApp
     if (workflow.state === "awaiting_approval") {
       const payout = workflow.payouts[0];
       if (!payout) return null;
+      const batch = workflow.payouts.length > 1;
       return approval(task, now, {
         bot: "flow",
         kind: "intent_review",
-        title: `Review ${payout.asset} transfer`,
-        summary: `${payout.amount} ${payout.asset} to ${shortAddress(payout.recipient_address)}`,
+        title: batch ? `Review ${payout.asset} batch` : `Review ${payout.asset} transfer`,
+        summary: batch ? `${workflow.totals[0]?.amount} ${payout.asset} across ${workflow.payouts.length} recipients` : `${payout.amount} ${payout.asset} to ${shortAddress(payout.recipient_address)}`,
         state: workflow.state,
         requested_at_ms: task.updated_at_ms,
       });
@@ -37,19 +38,21 @@ export function pendingApprovalForTask(task: Task, now = Date.now()): PendingApp
         bot: "flow",
         kind: "wallet_signature",
         title: "Wallet signature required",
-        summary: `Confirm ${payout.amount} ${payout.asset} in your mobile wallet`,
+        summary: workflow.payouts.length > 1 ? `Confirm ${workflow.payouts.length} exact transactions in your wallet` : `Confirm ${payout.amount} ${payout.asset} in your mobile wallet`,
         state: workflow.state,
         requested_at_ms: workflow.approval?.decided_at_ms ?? task.updated_at_ms,
       });
     }
-    if (workflow.state === "submitted" && workflow.submission) {
+    if (workflow.state === "submitted" && (workflow.submissions?.length || workflow.submission)) {
+      const submissions = workflow.submissions ?? [{ payout_index: 0, ...workflow.submission! }];
+      const verified = workflow.executions?.length ?? (workflow.execution ? 1 : 0);
       return approval(task, now, {
         bot: "flow",
         kind: "receipt_verification",
         title: "Verify submitted transfer",
-        summary: `Check receipt ${shortHash(workflow.submission.transaction_hash)}`,
+        summary: submissions.length > 1 ? `Verify ${submissions.length - verified} remaining Monad receipt(s)` : `Check receipt ${shortHash(submissions[0].transaction_hash)}`,
         state: workflow.state,
-        requested_at_ms: workflow.submission.submitted_at_ms,
+        requested_at_ms: submissions.at(-1)!.submitted_at_ms,
       });
     }
   }

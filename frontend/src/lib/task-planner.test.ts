@@ -31,6 +31,15 @@ describe("planUnifiedTask", () => {
   it("asks for missing transfer fields", () => {
     expect(planUnifiedTask("Send MON to my friend")).toMatchObject({ kind: "clarify" });
   });
+  it("creates an explicit same-amount MON batch", () => {
+    expect(planUnifiedTask("Send 0.01 MON to each of 0x1111111111111111111111111111111111111111, 0x2222222222222222222222222222222222222222")).toEqual({
+      kind: "flow_batch", amountEach: "0.01", recipients: ["0x1111111111111111111111111111111111111111", "0x2222222222222222222222222222222222222222"],
+      purpose: "Send 0.01 MON to each of 0x1111111111111111111111111111111111111111, 0x2222222222222222222222222222222222222222",
+    });
+  });
+  it("refuses an ambiguous multi-recipient amount", () => {
+    expect(planUnifiedTask("Send 1 MON to 0x1111111111111111111111111111111111111111 and 0x2222222222222222222222222222222222222222")).toMatchObject({ kind: "clarify", message: expect.stringMatching(/per-recipient/i) });
+  });
   it("requires explicit token contracts for a swap", () => {
     expect(planUnifiedTask("Swap 1 MON for USDC")).toMatchObject({ kind: "clarify", message: expect.stringMatching(/0xINPUT/i) });
   });

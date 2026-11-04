@@ -1,4 +1,4 @@
-import { encodeFunctionData, keccak256 } from "viem";
+import { encodeFunctionData, keccak256, stringToHex } from "viem";
 
 import type { CommerceCompletedTask, FlowCompletedTask, OperatorCompletedTask, Task } from "@/lib/donads-api";
 
@@ -81,36 +81,48 @@ export function missionStateForTask(task: Task): MissionState {
   }
   return "completed";
 }
-export function transactionIntentForTask(task: Task): TypedTransactionIntent | null {
-  if (task.status.state !== "completed" || task.bot !== "flow") return null;
+function childIntentId(workflowId: string, index: number): string {
+  if (index === 0) return workflowId;
+  const hash = keccak256(stringToHex(`${workflowId}:${index}`)).slice(2, 34);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+}
+
+export function transactionIntentsForTask(task: Task): TypedTransactionIntent[] {
+  if (task.status.state !== "completed" || task.bot !== "flow") return [];
   const flowTask = task as FlowCompletedTask;
   const workflow = flowTask.status.data.workflow;
-  const payout = workflow.payouts[0];
-  if (!payout) return null;
-  const calldata = workflow.transfer_kind === "erc20" && workflow.token && payout.amount_atomic
-    ? encodeFunctionData({
-      abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }] as const,
-      functionName: "transfer",
-      args: [payout.recipient_address as `0x${string}`, BigInt(payout.amount_atomic)],
-    })
-    : "0x";
-  return {
-    id: workflow.id,
-    task_id: task.id,
-    kind: workflow.transfer_kind === "erc20" ? "erc20_transfer" : "native_transfer",
-    chain_id: 10143,
-    sender: workflow.payer,
-    recipient: payout.recipient_address,
-    asset: payout.asset,
-    amount: payout.amount,
-    amount_atomic: payout.amount_atomic ?? null,
-    token_contract: workflow.token?.contract ?? null,
-    calldata,
-    calldata_hash: keccak256(calldata),
-    state: workflow.state,
-    idempotency_key: `flow:${workflow.id}`,
-    approval: workflow.approval,
-    submission: workflow.submission,
-    execution: workflow.execution,
-  };
+  const submissions = workflow.submissions ?? (workflow.submission ? [{ payout_index: 0, ...workflow.submission }] : []);
+  const executions = workflow.executions ?? (workflow.execution ? [{ payout_index: 0, ...workflow.execution }] : []);
+  return workflow.payouts.map((payout, index) => {
+    const calldata = workflow.transfer_kind === "erc20" && workflow.token && payout.amount_atomic
+      ? encodeFunctionData({
+        abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }] as const,
+        functionName: "transfer",
+        args: [payout.recipient_address as `0x${string}`, BigInt(payout.amount_atomic)],
+      })
+      : "0x";
+    return {
+      id: childIntentId(workflow.id, index),
+      task_id: task.id,
+      kind: workflow.transfer_kind === "erc20" ? "erc20_transfer" : "native_transfer",
+      chain_id: 10143,
+      sender: workflow.payer,
+      recipient: payout.recipient_address,
+      asset: payout.asset,
+      amount: payout.amount,
+      amount_atomic: payout.amount_atomic ?? null,
+      token_contract: workflow.token?.contract ?? null,
+      calldata,
+      calldata_hash: keccak256(calldata),
+      state: workflow.state,
+      idempotency_key: index === 0 ? `flow:${workflow.id}` : `flow:${workflow.id}:${index}`,
+      approval: workflow.approval,
+      submission: submissions.find((item) => item.payout_index === index) ?? null,
+      execution: executions.find((item) => item.payout_index === index) ?? null,
+    };
+  });
+}
+
+export function transactionIntentForTask(task: Task): TypedTransactionIntent | null {
+  return transactionIntentsForTask(task)[0] ?? null;
 }

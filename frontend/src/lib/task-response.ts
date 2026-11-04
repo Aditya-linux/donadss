@@ -37,6 +37,12 @@ export function taskResponseText(task: CompletedTask): string {
 
   const { workflow } = task.status.data;
   const payout = workflow.payouts[0];
+  const executions = workflow.executions ?? (workflow.execution ? [{ payout_index: 0, ...workflow.execution }] : []);
+  if (workflow.payouts.length > 1) {
+    const recipients = workflow.payouts.map((item, index) => `${index + 1}. ${item.amount} ${item.asset} to ${item.recipient_address}.`).join("\n");
+    const verified = executions.length === workflow.payouts.length ? `${executions.length} independently verified Monad receipts.` : task.status.data.blocked_reason;
+    return [task.status.summary, `Total: ${workflow.totals[0]?.amount} ${workflow.totals[0]?.asset}.`, recipients, verified].filter(Boolean).join("\n");
+  }
   const verified = workflow.execution ? `Verified in block ${workflow.execution.block_number}. Transaction: ${workflow.execution.transaction_hash}` : task.status.data.blocked_reason;
   return [task.status.summary, payout ? `${payout.amount} ${payout.asset} to ${payout.recipient_address}.` : "", verified].filter(Boolean).join("\n");
 }

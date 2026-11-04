@@ -20,7 +20,9 @@ authorize deployment or execution.
 
 ## Gate 3 — Contract assurance
 
-- Unit, fuzz and invariant suites.
+- Unit, fuzz and invariant suites. The current local run is recorded in
+  [`security/contract-fuzz-invariants-2026-11-03.md`](security/contract-fuzz-invariants-2026-11-03.md);
+  independent review and CI hardening remain required.
 - Static analysis with documented false-positive review.
 - Exact action authorization bound to chain, vault, session, asset, recipient,
   amount, calldata hash, nonce and expiry.

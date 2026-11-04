@@ -102,10 +102,11 @@ function reportHighlights(task: CompletedTask): string[] {
     ];
   }
   const workflow = task.status.data.workflow;
-  const payout = workflow.payouts[0];
+  const executions = workflow.executions ?? (workflow.execution ? [{ payout_index: 0, ...workflow.execution }] : []);
   return [
-    payout ? `${payout.amount} ${payout.asset} to ${payout.recipient_address}.` : "No payout was included.",
-    workflow.execution ? `Transaction ${workflow.execution.transaction_hash} was verified in block ${workflow.execution.block_number}.` : "No verified on-chain execution receipt was produced.",
+    `Approved total: ${workflow.totals[0]?.amount} ${workflow.totals[0]?.asset} across ${workflow.payouts.length} recipient(s).`,
+    ...workflow.payouts.map((payout, index) => `Recipient ${index + 1}: ${payout.amount} ${payout.asset} to ${payout.recipient_address}.`),
+    executions.length ? `${executions.length}/${workflow.payouts.length} transaction receipt(s) were independently verified.` : "No verified on-chain execution receipt was produced.",
     `Final payment state: ${workflow.state.replaceAll("_", " ")}.`,
   ];
 }

@@ -5,6 +5,7 @@ export type UnifiedPlan =
   | { kind: "operator"; objective: string; sources: string[] }
   | { kind: "flow"; recipient: string; amount: string; purpose: string; asset: "MON"; tokenContract: null }
   | { kind: "flow"; recipient: string; amount: string; purpose: string; asset: string; tokenContract: string }
+  | { kind: "flow_batch"; recipients: string[]; amountEach: string; purpose: string }
   | { kind: "swap"; amount: string; inputAsset: string; tokenIn: string; outputAsset: string; tokenOut: string; slippageBps: number; maxPriceImpactBps: number }
   | { kind: "vault_deploy" }
   | { kind: "session_configure"; sessionKey: string; vault: string; recipient: string; perTransaction: string; daily: string; durationHours: number }
@@ -23,7 +24,9 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const urls = urlsIn(prompt);
   const bytecode = prompt.match(/0x[0-9a-fA-F]{4,}/)?.[0];
   const recipient = prompt.match(/\b0x[0-9a-fA-F]{40}\b/)?.[0];
+  const recipients = [...new Set(prompt.match(/\b0x[0-9a-fA-F]{40}\b/g)?.map((value) => value.toLowerCase()) ?? [])];
   const amount = prompt.match(/\b(\d+(?:\.\d{1,18})?)\s*MON\b/i)?.[1];
+  const batchAmount = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d{1,18})?)\s*MON\s+(?:to\s+each(?:\s+of)?|each\s+to)\b/i)?.[1];
   const tokenTransfer = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+(?:token|contract)\s+(0x[0-9a-fA-F]{40})\s+to\s+(0x[0-9a-fA-F]{40})\b/i);
   const swap = prompt.match(/\bswap\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})\s+for\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})(?:\s+(?:with\s+)?max(?:imum)?\s+(\d+(?:\.\d{1,2})?)%\s+slippage)?/i);
   const escrow = prompt.match(/\bcreate\s+escrow\s+(\d+(?:\.\d{1,18})?)\s+MON\s+for\s+(0x[0-9a-fA-F]{40})\s+with\s+arbiter\s+(0x[0-9a-fA-F]{40})\s+refund\s+after\s+(\d{1,4})\s+hours?\s+terms\s+(.{3,500})$/i);
@@ -60,6 +63,11 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
     return { kind: "clarify", message: "Use: ‘Swap 1 USDC token 0xINPUT for DAI token 0xOUTPUT max 0.5% slippage’. Flow will query only the allowlisted Uniswap v3 Monad Testnet adapter and block quotes above policy." };
   }
   if (/(pay|send|transfer)/i.test(prompt)) {
+    if (!tokenTransfer && recipients.length > 1) {
+      if (!batchAmount) return { kind: "clarify", message: "For multiple recipients, state the per-recipient amount explicitly: ‘Send 0.01 MON to each of 0xA, 0xB, 0xC’. This prevents confusing a total with an amount per wallet." };
+      if (recipients.length > 10) return { kind: "clarify", message: "A reviewed batch supports up to 10 unique recipients. Split larger distributions into separate batches." };
+      return { kind: "flow_batch", recipients, amountEach: batchAmount, purpose: prompt };
+    }
     if (tokenTransfer) return { kind: "flow", amount: tokenTransfer[1], asset: tokenTransfer[2].toUpperCase(), tokenContract: tokenTransfer[3], recipient: tokenTransfer[4], purpose: prompt };
     if (recipient && amount) return { kind: "flow", recipient, amount, purpose: prompt, asset: "MON", tokenContract: null };
     return { kind: "clarify", message: "For MON: ‘Send 0.01 MON to 0x…’. For a token: ‘Send 10 USDC token 0xTOKEN_CONTRACT to 0xRECIPIENT’. Flow validates the exact contract before wallet approval." };

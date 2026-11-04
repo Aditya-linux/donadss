@@ -138,14 +138,25 @@ async function recordFlowSubmission(ownerId: string, id: string, request: Reques
   if (task.bot !== "flow" || task.status.state !== "completed") throw new Error("Flow task not found.");
   const payload = await body(request);
   const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash.toLowerCase() : "";
+  const payoutIndex = Number(payload.payout_index ?? 0);
   if (!/^0x[0-9a-f]{64}$/.test(hash)) throw new Error("A valid transaction hash is required.");
   const workflow = task.status.data.workflow;
-  if (workflow.state === "submitted" && workflow.submission?.transaction_hash === hash) return json(task);
-  if (workflow.state !== "authorized") throw new Error("The exact transfer must be authorized before recording a wallet submission.");
-  workflow.state = "submitted";
-  workflow.submission = { transaction_hash: hash, submitted_at_ms: Date.now() };
-  workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_submitted", detail: "Wallet returned a transaction hash; receipt verification is pending.", at_ms: Date.now() });
-  task.status.summary = "Flow recorded the wallet submission and is waiting for a matching Monad receipt.";
+  if (!Number.isInteger(payoutIndex) || payoutIndex < 0 || payoutIndex >= workflow.payouts.length) throw new Error("A valid payout index is required.");
+  const submissions = workflow.submissions ?? (workflow.submission ? [{ payout_index: 0, ...workflow.submission }] : []);
+  const previous = submissions.find((item) => item.payout_index === payoutIndex);
+  if (previous) {
+    if (previous.transaction_hash !== hash) throw new Error("A different transaction is already recorded for this payout.");
+    return json(task);
+  }
+  if (!["authorized", "submitted"].includes(workflow.state)) throw new Error("The exact transfer must be authorized before recording a wallet submission.");
+  if (submissions.some((item) => item.transaction_hash === hash)) throw new Error("One transaction cannot satisfy multiple payouts.");
+  const submission = { payout_index: payoutIndex, transaction_hash: hash, submitted_at_ms: Date.now() };
+  submissions.push(submission); submissions.sort((left, right) => left.payout_index - right.payout_index);
+  workflow.submissions = submissions;
+  if (payoutIndex === 0) workflow.submission = { transaction_hash: hash, submitted_at_ms: submission.submitted_at_ms };
+  workflow.state = submissions.length === workflow.payouts.length ? "submitted" : "authorized";
+  workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_submitted", detail: `Wallet returned transaction ${payoutIndex + 1}/${workflow.payouts.length}; receipt verification is pending.`, at_ms: Date.now() });
+  task.status.summary = `Flow recorded ${submissions.length}/${workflow.payouts.length} wallet submission(s).`;
   task.updated_at_ms = Date.now();
   task.events.push(taskEvent(task.events, "transaction_submitted", task.status.summary));
   await updateTask(task);
@@ -157,15 +168,24 @@ async function confirmFlow(ownerId: string, id: string, request: Request): Promi
   if (task.bot !== "flow" || task.status.state !== "completed") throw new Error("Flow task not found.");
   const payload = await body(request);
   const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash.toLowerCase() : "";
+  const payoutIndex = Number(payload.payout_index ?? 0);
   if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("A valid transaction hash is required.");
   const workflow = task.status.data.workflow;
-  if (workflow.state === "confirmed" && workflow.execution?.transaction_hash === hash) return json(task);
-  if (workflow.state !== "submitted" || workflow.submission?.transaction_hash !== hash) throw new Error("Transaction hash does not match the recorded wallet submission.");
+  if (!Number.isInteger(payoutIndex) || payoutIndex < 0 || payoutIndex >= workflow.payouts.length) throw new Error("A valid payout index is required.");
+  const executions = workflow.executions ?? (workflow.execution ? [{ payout_index: 0, ...workflow.execution }] : []);
+  const previousExecution = executions.find((item) => item.payout_index === payoutIndex);
+  if (previousExecution) {
+    if (previousExecution.transaction_hash !== hash) throw new Error("A different transaction is already verified for this payout.");
+    return json(task);
+  }
+  const submissions = workflow.submissions ?? (workflow.submission ? [{ payout_index: 0, ...workflow.submission }] : []);
+  const submission = submissions.find((item) => item.payout_index === payoutIndex);
+  if (workflow.state !== "submitted" || submission?.transaction_hash !== hash) throw new Error("Transaction hash does not match the recorded wallet submission.");
   const transaction = await monadRpc("eth_getTransactionByHash", [hash]) as Record<string, string> | null;
   const receipt = await monadRpc("eth_getTransactionReceipt", [hash]) as Record<string, string> | null;
   if (!transaction || !receipt?.blockNumber) throw new Error("Transaction has not been mined yet.");
   if (receipt.status !== "0x1") throw new Error("Monad receipt reports a reverted transaction.");
-  const payout = workflow.payouts[0];
+  const payout = workflow.payouts[payoutIndex];
   if (transaction.from?.toLowerCase() !== workflow.payer) throw new Error("Mined transaction sender does not match the approved payer.");
   let senderBalanceAfter: bigint | null = null;
   let recipientBalanceAfter: bigint | null = null;
@@ -182,10 +202,13 @@ async function confirmFlow(ownerId: string, id: string, request: Request): Promi
   } else if (transaction.to?.toLowerCase() !== payout.recipient_address || BigInt(transaction.value) !== monToWei(payout.amount) || !["0x", "0x0", undefined].includes(transaction.input)) {
     throw new Error("Mined native transaction does not match the approved recipient, amount, or calldata policy.");
   }
-  workflow.state = "confirmed";
-  workflow.execution = { transaction_hash: hash.toLowerCase(), block_number: Number(BigInt(receipt.blockNumber)), confirmed_at_ms: Date.now(), ...(senderBalanceAfter === null ? {} : { sender_balance_after_atomic: senderBalanceAfter.toString(), recipient_balance_after_atomic: recipientBalanceAfter!.toString() }) };
-  workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_confirmed", detail: `Monad receipt verified in block ${workflow.execution.block_number}.`, at_ms: Date.now() });
-  task.status.summary = "Flow verified the successful Monad Testnet transaction and exact approved values.";
+  const execution = { payout_index: payoutIndex, transaction_hash: hash.toLowerCase(), block_number: Number(BigInt(receipt.blockNumber)), confirmed_at_ms: Date.now(), ...(senderBalanceAfter === null ? {} : { sender_balance_after_atomic: senderBalanceAfter.toString(), recipient_balance_after_atomic: recipientBalanceAfter!.toString() }) };
+  executions.push(execution); executions.sort((left, right) => left.payout_index - right.payout_index);
+  workflow.executions = executions;
+  if (payoutIndex === 0) workflow.execution = { transaction_hash: execution.transaction_hash, block_number: execution.block_number, confirmed_at_ms: execution.confirmed_at_ms, ...(senderBalanceAfter === null ? {} : { sender_balance_after_atomic: senderBalanceAfter.toString(), recipient_balance_after_atomic: recipientBalanceAfter!.toString() }) };
+  workflow.state = executions.length === workflow.payouts.length ? "confirmed" : "submitted";
+  workflow.audit_history.push({ sequence: workflow.audit_history.length + 1, event: "transaction_confirmed", detail: `Monad receipt ${payoutIndex + 1}/${workflow.payouts.length} verified in block ${execution.block_number}.`, at_ms: Date.now() });
+  task.status.summary = workflow.state === "confirmed" ? `Flow independently verified all ${workflow.payouts.length} Monad Testnet transaction receipt(s).` : `Flow verified ${executions.length}/${workflow.payouts.length} Monad Testnet receipt(s).`;
   task.updated_at_ms = Date.now();
   task.events.push(taskEvent(task.events, "transaction_confirmed", task.status.summary));
   await updateTask(task);

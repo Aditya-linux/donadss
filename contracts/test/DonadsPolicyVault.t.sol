@@ -162,4 +162,56 @@ contract DonadsPolicyVaultTest {
         );
         require(!success, "session invented an unauthorized action");
     }
+
+    function testFuzzBoundedTransferPreservesAccounting(uint128 seedAmount, uint256 nonce, bytes32 missionId) public {
+        uint128 amount = uint128(uint256(seedAmount) % 2 ether) + 1;
+        payable(address(vault)).transfer(amount);
+        uint256 receiverBefore = address(receiver).balance;
+        uint64 validUntil = authorize(amount, missionId, nonce);
+        session.execute(vault, payable(address(receiver)), amount, missionId, nonce, validUntil);
+        (,,, uint128 spentToday,,) = vault.sessions(address(session));
+        require(spentToday == amount, "fuzz spend accounting mismatch");
+        require(address(receiver).balance == receiverBefore + amount, "fuzz recipient delta mismatch");
+    }
+
+    function testFuzzActionHashBindsNonce(uint128 seedAmount, uint256 nonce, bytes32 missionId) public view {
+        uint128 amount = uint128(uint256(seedAmount) % 2 ether) + 1;
+        uint64 validUntil = uint64(block.timestamp + 1 hours);
+        bytes32 first = vault.nativeActionHash(address(session), address(receiver), amount, missionId, nonce, validUntil);
+        bytes32 second = vault.nativeActionHash(address(session), address(receiver), amount, missionId, nonce ^ 1, validUntil);
+        require(first != second, "nonce is not bound to action hash");
+    }
+}
+
+contract DonadsPolicyVaultInvariantTest {
+    DonadsPolicyVault private vault;
+    SessionActor private session;
+    NativeReceiver private receiver;
+
+    function setUp() public {
+        vault = new DonadsPolicyVault();
+        session = new SessionActor();
+        receiver = new NativeReceiver();
+        vault.configureSession(address(session), uint64(block.timestamp + 30 days), 2 ether, 5 ether);
+        vault.setRecipientAllowed(address(receiver), true);
+    }
+
+    function targetContracts() public view returns (address[] memory targets) {
+        targets = new address[](1);
+        targets[0] = address(vault);
+    }
+
+    function invariantOwnerNeverChanges() public view {
+        require(vault.owner() == address(this), "vault owner changed");
+    }
+
+    function invariantSessionSpendNeverExceedsDailyLimit() public view {
+        (,, uint128 dailyLimit, uint128 spentToday,,) = vault.sessions(address(session));
+        require(spentToday <= dailyLimit, "session exceeded daily limit");
+    }
+
+    function invariantConfiguredDailyLimitCoversPerTransactionLimit() public view {
+        (, uint128 perTransaction, uint128 dailyLimit,,,) = vault.sessions(address(session));
+        require(dailyLimit >= perTransaction, "invalid configured limits");
+    }
 }

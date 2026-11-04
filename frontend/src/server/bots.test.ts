@@ -29,6 +29,31 @@ describe("Vercel specialist execution", () => {
     expect(monToWei("0.25")).toBe(BigInt("250000000000000000"));
   });
 
+  it("prepares a bounded native MON batch with a computed total", async () => {
+    const result = await executeBot("flow", {
+      title: "Batch", purpose: "Pay contributors", payer: "0x1111111111111111111111111111111111111111",
+      payouts: [
+        { recipient_name: "A", recipient_address: "0x2222222222222222222222222222222222222222", asset: "MON", amount: "0.01", milestone: "Test", deadline: null },
+        { recipient_name: "B", recipient_address: "0x3333333333333333333333333333333333333333", asset: "MON", amount: "0.01", milestone: "Test", deadline: null },
+      ], approval_conditions: ["Exact batch reviewed"], linked_task_id: null,
+    });
+    expect(result.state).toBe("completed");
+    if (result.state !== "completed" || !("workflow" in result.data) || !("payouts" in result.data.workflow)) throw new Error("Unexpected Flow result.");
+    expect(result.data.workflow.payouts).toHaveLength(2);
+    expect(result.data.workflow.totals[0]).toEqual({ asset: "MON", amount: "0.02" });
+    expect(result.data.workflow.submissions).toEqual([]);
+  });
+
+  it("rejects duplicate batch recipients", async () => {
+    await expect(executeBot("flow", {
+      title: "Batch", purpose: "Pay contributors", payer: "0x1111111111111111111111111111111111111111",
+      payouts: [
+        { recipient_name: "A", recipient_address: "0x2222222222222222222222222222222222222222", asset: "MON", amount: "0.01", milestone: "Test", deadline: null },
+        { recipient_name: "A again", recipient_address: "0x2222222222222222222222222222222222222222", asset: "MON", amount: "0.01", milestone: "Test", deadline: null },
+      ], approval_conditions: [], linked_task_id: null,
+    })).rejects.toThrow(/unique/i);
+  });
+
   it("rejects an Operator graph with a forward dependency", async () => {
     await expect(executeBot("operator", {
       objective: "Invalid graph",

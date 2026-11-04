@@ -92,6 +92,8 @@ The approved product scope will be implemented in this order without adding a ne
 
 Every financial workflow must also support simulation mode, explainable Sentinel blocking, and a proof-of-completion record containing the workflow steps, approvals, evidence, transaction hashes, balance changes, and final status. The security audit remains a mandatory mainnet gate but is intentionally deferred while the testnet feature pipeline is completed.
 
+Flow also supports reviewed native-MON batches of up to ten unique recipients. The user must explicitly state that the amount is per recipient. DONADS checks the remaining value plus estimated gas before the first signature, records each submission independently, resumes safely after interruption, and completes the batch only after every receipt matches its approved recipient and amount. ERC-20 batches remain disabled until equivalent per-recipient balance-delta verification is implemented.
+
 ### Final manual acceptance suite
 
 The feature set is not called complete until a user can run and preserve evidence for at least these testnet cases:

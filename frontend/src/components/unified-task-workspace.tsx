@@ -126,14 +126,15 @@ function fileAsBase64(file: File): Promise<string> {
 
 function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowCompletedTask; working: boolean; onApprove: () => void; onReject: () => void }) {
   const workflow = task.status.data.workflow;
-  const payout = workflow.payouts[0];
   const actionable = ["awaiting_approval", "authorized", "submitted"].includes(workflow.state);
+  const executions = workflow.executions ?? (workflow.execution ? [{ payout_index: 0, ...workflow.execution }] : []);
   return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
-    <div className="flex items-center justify-between gap-3"><span className="font-medium">Exact Monad Testnet intent</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px] capitalize">{workflow.state.replaceAll("_", " ")}</span></div>
-    <div><p className="font-mono text-base font-semibold tabular-nums">{payout.amount} {payout.asset}</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">To {payout.recipient_address}</p>{payout.token_contract ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">Token {payout.token_contract}</p> : null}</div>
-    <p className="text-xs leading-5 text-muted-foreground">Your wallet must show this exact recipient and amount. DONADS reports completion only after the mined receipt matches both.</p>
-    {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transaction" : "Approve in wallet and send"}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
-    {workflow.execution ? <a href={`${MONAD_TESTNET_EXPLORER}/tx/${workflow.execution.transaction_hash}`} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">View verified transaction <ExternalLink className="size-3.5" aria-hidden="true" /></a> : null}
+    <div className="flex items-center justify-between gap-3"><span className="font-medium">Exact Monad Testnet {workflow.payouts.length > 1 ? "batch" : "intent"}</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px] capitalize">{workflow.state.replaceAll("_", " ")}</span></div>
+    <div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Total approved value</p><p className="mt-1 font-mono text-base font-semibold tabular-nums">{workflow.totals[0]?.amount} {workflow.totals[0]?.asset}</p><p className="mt-1 text-[11px] text-muted-foreground">{workflow.payouts.length} recipient{workflow.payouts.length === 1 ? "" : "s"} · {executions.length}/{workflow.payouts.length} receipts verified</p></div>
+    <ol className="max-h-56 space-y-2 overflow-y-auto">{workflow.payouts.map((payout, index) => <li key={`${payout.recipient_address}-${index}`} className="rounded-lg border border-border p-3"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium">Recipient {index + 1}</span><span className="font-mono text-xs tabular-nums">{payout.amount} {payout.asset}</span></div><p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{payout.recipient_address}</p>{payout.token_contract ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">Token {payout.token_contract}</p> : null}</li>)}</ol>
+    <p className="text-xs leading-5 text-muted-foreground">Your wallet confirms each exact transaction separately. DONADS completes the batch only after every mined receipt matches its approved recipient and amount.</p>
+    {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transactions" : `Review and send ${workflow.payouts.length} transaction${workflow.payouts.length === 1 ? "" : "s"}`}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
+    {executions.map((execution) => <a key={execution.transaction_hash} href={`${MONAD_TESTNET_EXPLORER}/tx/${execution.transaction_hash}`} target="_blank" rel="noreferrer" className="mr-3 inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">Receipt {execution.payout_index + 1} <ExternalLink className="size-3.5" aria-hidden="true" /></a>)}
   </div>;
 }
 
@@ -308,15 +309,18 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         return;
       }
       let completed: CompletedTask;
-      if (plan.kind === "flow") {
+      if (plan.kind === "flow" || plan.kind === "flow_batch") {
         if (!walletAddress) throw new Error("Reconnect your wallet before preparing a transfer.");
         setProgress("Flow is validating the exact Monad transfer…");
+        const payouts = plan.kind === "flow_batch"
+          ? (() => { const { amountEach, purpose } = plan; return plan.recipients.map((recipient, index) => ({ recipient_name: `Recipient ${index + 1}`, recipient_address: recipient, asset: "MON", amount: amountEach, milestone: purpose, deadline: null, token_contract: null })); })()
+          : [{ recipient_name: "Recipient", recipient_address: plan.recipient, asset: plan.asset, amount: plan.amount, milestone: plan.purpose, deadline: null, token_contract: plan.tokenContract }];
         const queued = await createFlowTask({
-          title: "Chat-initiated Monad transfer",
+          title: plan.kind === "flow_batch" ? "Chat-initiated Monad batch" : "Chat-initiated Monad transfer",
           purpose: plan.purpose,
           payer: walletAddress,
-          payouts: [{ recipient_name: "Recipient", recipient_address: plan.recipient, asset: plan.asset, amount: plan.amount, milestone: plan.purpose, deadline: null, token_contract: plan.tokenContract }],
-          approval_conditions: [`Exact sender, recipient, ${plan.asset} amount, token contract, and Monad Testnet chain approved`],
+          payouts,
+          approval_conditions: ["Exact sender, every recipient, every amount, total value, and Monad Testnet chain approved"],
           linked_task_id: null,
         }, signal);
         completed = await waitForTask(queued.id, undefined, signal);
@@ -408,41 +412,64 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         updateFlowMessage(messageId, current);
       }
 
-      let transactionHash = current.status.data.workflow.submission?.transaction_hash ?? readPendingFlowHash(task.id);
-      if (current.status.data.workflow.state === "authorized") {
-        if (!transactionHash) {
-          const provider = await connectWalletProvider();
-          await ensureMonadTestnet(provider);
-          const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
-          const from = accounts[0];
-          const workflow = current.status.data.workflow;
-          if (!from || from.toLowerCase() !== workflow.payer.toLowerCase()) throw new Error("Connected wallet does not match the wallet bound to this intent.");
-          const payout = workflow.payouts[0];
-          const transaction = payout.token_contract && payout.amount_atomic
-            ? { from, to: payout.token_contract, value: "0x0", data: erc20TransferData(payout.recipient_address, payout.amount_atomic) }
-            : { from, to: payout.recipient_address, value: monToWeiHex(payout.amount) };
-          transactionHash = await provider.request({ method: "eth_sendTransaction", params: [transaction] }) as string;
-          rememberPendingFlowHash(task.id, transactionHash);
+      let submissions = current.status.data.workflow.submissions ?? (current.status.data.workflow.submission ? [{ payout_index: 0, ...current.status.data.workflow.submission }] : []);
+      if (submissions.length < current.status.data.workflow.payouts.length) {
+        const provider = await connectWalletProvider();
+        await ensureMonadTestnet(provider);
+        const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+        const from = accounts[0];
+        const workflow = current.status.data.workflow;
+        if (!from || from.toLowerCase() !== workflow.payer.toLowerCase()) throw new Error("Connected wallet does not match the wallet bound to this intent.");
+        if (workflow.transfer_kind === "native") {
+          const [balanceHex, gasPriceHex] = await Promise.all([
+            provider.request({ method: "eth_getBalance", params: [from, "latest"] }) as Promise<string>,
+            provider.request({ method: "eth_gasPrice" }) as Promise<string>,
+          ]);
+          const unsent = workflow.payouts.filter((_, index) => !submissions.some((item) => item.payout_index === index));
+          const requiredValue = unsent.reduce((total, payout) => total + BigInt(monToWeiHex(payout.amount)), BigInt(0));
+          const gasReserve = BigInt(gasPriceHex) * BigInt(21_000 * unsent.length);
+          if (BigInt(balanceHex) < requiredValue + gasReserve) throw new Error("Insufficient MON for the remaining batch value plus estimated gas.");
         }
-        current = await recordFlowSubmission(task.id, transactionHash);
-        updateFlowMessage(messageId, current);
+        for (let index = 0; index < workflow.payouts.length; index += 1) {
+          if (submissions.some((item) => item.payout_index === index)) continue;
+          const payout = workflow.payouts[index];
+          let transactionHash = readPendingFlowHash(task.id, index);
+          if (!transactionHash) {
+            const transaction = payout.token_contract && payout.amount_atomic
+              ? { from, to: payout.token_contract, value: "0x0", data: erc20TransferData(payout.recipient_address, payout.amount_atomic) }
+              : { from, to: payout.recipient_address, value: monToWeiHex(payout.amount) };
+            setProgress(`Waiting for wallet approval ${index + 1}/${workflow.payouts.length}…`);
+            transactionHash = await provider.request({ method: "eth_sendTransaction", params: [transaction] }) as string;
+            rememberPendingFlowHash(task.id, transactionHash, index);
+          }
+          current = await recordFlowSubmission(task.id, transactionHash, index);
+          submissions = current.status.data.workflow.submissions ?? [];
+          updateFlowMessage(messageId, current);
+        }
       }
 
-      if (!transactionHash) throw new Error("No wallet transaction has been submitted for this intent.");
-      let lastError: Error | undefined;
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        try {
-          const confirmed = await confirmFlowTransaction(task.id, transactionHash);
-          forgetPendingFlowHash(task.id);
-          updateFlowMessage(messageId, confirmed);
-          return;
-        } catch (cause) {
-          lastError = cause instanceof Error ? cause : new Error("Receipt verification failed.");
-          if (!/not been mined|not known/i.test(lastError.message)) throw lastError;
-          await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      submissions = current.status.data.workflow.submissions ?? (current.status.data.workflow.submission ? [{ payout_index: 0, ...current.status.data.workflow.submission }] : []);
+      if (submissions.length !== current.status.data.workflow.payouts.length) throw new Error("Not every approved payout has a recorded wallet transaction.");
+      for (const submission of submissions) {
+        if (current.status.data.workflow.executions?.some((item) => item.payout_index === submission.payout_index)) continue;
+        let lastError: Error | undefined;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          try {
+            setProgress(`Verifying Monad receipt ${submission.payout_index + 1}/${submissions.length}…`);
+            current = await confirmFlowTransaction(task.id, submission.transaction_hash, submission.payout_index);
+            forgetPendingFlowHash(task.id, submission.payout_index);
+            updateFlowMessage(messageId, current);
+            lastError = undefined;
+            break;
+          } catch (cause) {
+            lastError = cause instanceof Error ? cause : new Error("Receipt verification failed.");
+            if (!/not been mined|not known/i.test(lastError.message)) throw lastError;
+            await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+          }
         }
+        if (lastError) throw lastError;
       }
-      throw lastError ?? new Error("The submitted transaction was not confirmed before the timeout. Retry verification; DONADS will not send it again.");
+      return;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The transaction could not be completed.");
     } finally {

@@ -16,4 +16,13 @@ describe("Flow submission recovery", () => {
   it("rejects malformed wallet hashes", () => {
     expect(() => rememberPendingFlowHash("task-1", "0x1234")).toThrow(/invalid transaction hash/i);
   });
+
+  it("stores independent recovery hashes for each batch payout", () => {
+    const first = `0x${"11".repeat(32)}`; const second = `0x${"22".repeat(32)}`;
+    rememberPendingFlowHash("batch", first, 0); rememberPendingFlowHash("batch", second, 1);
+    expect(readPendingFlowHash("batch", 0)).toBe(first);
+    expect(readPendingFlowHash("batch", 1)).toBe(second);
+    forgetPendingFlowHash("batch", 0);
+    expect(readPendingFlowHash("batch", 1)).toBe(second);
+  });
 });

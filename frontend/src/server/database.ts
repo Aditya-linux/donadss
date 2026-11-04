@@ -4,7 +4,7 @@ import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
 import type { BrandProfile, OperatorRoutine, Task } from "@/lib/donads-api";
 import type { Mission } from "@/lib/missions";
-import { missionStateForTask, transactionIntentForTask } from "@/lib/missions";
+import { missionStateForTask, transactionIntentsForTask } from "@/lib/missions";
 import type { UniswapQuote } from "@/server/uniswap";
 
 type ChallengeRow = {
@@ -342,7 +342,7 @@ export async function updateTask(task: Task): Promise<void> {
   const state = missionStateForTask(task);
   const event = task.events.at(-1) ?? { kind: "updated", message: "Mission updated.", at_ms: task.updated_at_ms };
   const terminal = ["completed", "failed", "cancelled"].includes(state);
-  const intent = transactionIntentForTask(task);
+  const intents = transactionIntentsForTask(task);
   const queries = [
     db`UPDATE donads_tasks SET events = ${JSON.stringify(task.events)}, status = ${JSON.stringify(task.status)},
       feedback = ${JSON.stringify(task.feedback)}, updated_at_ms = ${task.updated_at_ms}
@@ -361,7 +361,7 @@ export async function updateTask(task: Task): Promise<void> {
       error_code = ${task.status.state === "failed" ? "SPECIALIST_FAILED" : null}
       WHERE mission_id = (SELECT id FROM donads_missions WHERE task_id = ${task.id} AND owner_id = ${task.owner_id}) AND attempt_number = 1`,
   ];
-  if (intent) {
+  for (const intent of intents) {
     queries.push(db`INSERT INTO donads_transaction_intents(
         id, mission_id, task_id, owner_id, kind, chain_id, sender, recipient, asset, amount,
         amount_atomic, token_contract, calldata_hash, state, idempotency_key, data, updated_at_ms

@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-import { getAddress, isAddress } from "viem";
+import { formatEther, getAddress, isAddress } from "viem";
 
 import type {
   CommerceCompletedTask,
@@ -200,16 +200,23 @@ async function flow(input: unknown, started: number): Promise<FlowCompletedTask[
   const data = object(input);
   const payer = text(data.payer, "payer");
   if (!isAddress(payer)) throw new Error("payer must be a valid EVM address.");
-  if (!Array.isArray(data.payouts) || data.payouts.length !== 1) throw new Error("Flow currently requires exactly one payout.");
-  const payout = object(data.payouts[0], "payout");
-  const recipient = text(payout.recipient_address, "recipient_address");
-  if (!isAddress(recipient)) throw new Error("recipient_address must be a valid EVM address.");
-  const rawAmount = text(payout.amount, "amount");
-  const tokenContract = typeof payout.token_contract === "string" ? payout.token_contract.trim() : "";
+  if (!Array.isArray(data.payouts) || !data.payouts.length || data.payouts.length > 10) throw new Error("Flow requires between one and ten payouts.");
+  const payoutInputs = data.payouts.map((value) => object(value, "payout"));
+  const firstPayout = payoutInputs[0];
+  const tokenContract = typeof firstPayout.token_contract === "string" ? firstPayout.token_contract.trim() : "";
+  if (payoutInputs.length > 1 && tokenContract) throw new Error("Multi-recipient batches currently support native MON only.");
   const token = tokenContract ? await readErc20Metadata(tokenContract) : null;
-  if (token && typeof payout.asset === "string" && payout.asset.trim().toUpperCase() !== token.symbol.toUpperCase()) throw new Error(`Token symbol mismatch: contract reports ${token.symbol}.`);
-  const amount = token ? rawAmount : decimalAmount(rawAmount);
+  if (token && typeof firstPayout.asset === "string" && firstPayout.asset.trim().toUpperCase() !== token.symbol.toUpperCase()) throw new Error(`Token symbol mismatch: contract reports ${token.symbol}.`);
+  const normalizedPayouts = payoutInputs.map((payout, index) => {
+    const recipient = text(payout.recipient_address, `payouts[${index}].recipient_address`);
+    if (!isAddress(recipient)) throw new Error(`payouts[${index}].recipient_address must be a valid EVM address.`);
+    const amount = token ? text(payout.amount, `payouts[${index}].amount`) : decimalAmount(payout.amount);
+    return { payout, recipient: getAddress(recipient).toLowerCase(), amount };
+  });
+  if (new Set(normalizedPayouts.map((item) => item.recipient)).size !== normalizedPayouts.length) throw new Error("Batch recipient addresses must be unique.");
+  const amount = normalizedPayouts[0].amount;
   const amountAtomic = token ? tokenAmountToAtomic(amount, token.decimals) : null;
+  const recipient = normalizedPayouts[0].recipient;
   const [senderBalance, recipientBalance] = token ? await Promise.all([
     readErc20Balance(token.contract, payer),
     readErc20Balance(token.contract, recipient),
@@ -217,8 +224,11 @@ async function flow(input: unknown, started: number): Promise<FlowCompletedTask[
   if (amountAtomic !== null && senderBalance !== null && senderBalance < amountAtomic) throw new Error(`Insufficient ${token?.symbol} balance for this transfer.`);
   const now = Date.now();
   const asset = token?.symbol ?? "MON";
-  const workflow = { id: crypto.randomUUID(), title: text(data.title, "title"), purpose: text(data.purpose, "purpose"), payer: getAddress(payer).toLowerCase(), network: "Monad Testnet" as const, chain_id: 10143 as const, transfer_kind: token ? "erc20" as const : "native" as const, token: token ? { ...token, sender_balance_before_atomic: senderBalance!.toString(), recipient_balance_before_atomic: recipientBalance!.toString() } : null, state: "awaiting_approval" as const, payouts: [{ recipient_name: text(payout.recipient_name, "recipient_name"), recipient_address: getAddress(recipient).toLowerCase(), asset, amount, milestone: text(payout.milestone, "milestone"), deadline: typeof payout.deadline === "string" ? payout.deadline : null, token_contract: token?.contract ?? null, token_decimals: token?.decimals ?? null, amount_atomic: amountAtomic?.toString() ?? null }], totals: [{ asset, amount }], approval_conditions: stringArray(data.approval_conditions, "approval_conditions"), linked_task_id: typeof data.linked_task_id === "string" ? data.linked_task_id : null, approval: null, submission: null, execution: null, audit_history: [{ sequence: 1, event: "intent_created", detail: `Exact Monad Testnet ${asset} transfer prepared; no signature requested.`, at_ms: now }] };
-  return { state: "completed", summary: `Flow prepared an exact Monad Testnet ${asset} transfer intent and is waiting for explicit wallet approval.`, data: { workflow, agent_version: "flow-vercel-v2", execution_available: false, blocked_reason: "The user must approve and broadcast the exact transaction in their browser wallet." }, latency_ms: Date.now() - started };
+  const payouts = normalizedPayouts.map(({ payout, recipient, amount }, index) => ({ recipient_name: typeof payout.recipient_name === "string" && payout.recipient_name.trim() ? payout.recipient_name.trim() : `Recipient ${index + 1}`, recipient_address: recipient, asset, amount, milestone: text(payout.milestone, "milestone"), deadline: typeof payout.deadline === "string" ? payout.deadline : null, token_contract: token?.contract ?? null, token_decimals: token?.decimals ?? null, amount_atomic: token ? tokenAmountToAtomic(amount, token.decimals).toString() : null }));
+  const totalAtomic = token ? amountAtomic!.toString() : normalizedPayouts.reduce((total, item) => total + monToWei(item.amount), BigInt(0)).toString();
+  const totalAmount = token ? amount : formatEther(BigInt(totalAtomic));
+  const workflow = { id: crypto.randomUUID(), title: text(data.title, "title"), purpose: text(data.purpose, "purpose"), payer: getAddress(payer).toLowerCase(), network: "Monad Testnet" as const, chain_id: 10143 as const, transfer_kind: token ? "erc20" as const : "native" as const, token: token ? { ...token, sender_balance_before_atomic: senderBalance!.toString(), recipient_balance_before_atomic: recipientBalance!.toString() } : null, state: "awaiting_approval" as const, payouts, totals: [{ asset, amount: totalAmount }], total_atomic: totalAtomic, approval_conditions: stringArray(data.approval_conditions, "approval_conditions"), linked_task_id: typeof data.linked_task_id === "string" ? data.linked_task_id : null, approval: null, submission: null, submissions: [], execution: null, executions: [], audit_history: [{ sequence: 1, event: "intent_created", detail: `Exact Monad Testnet ${asset} ${payouts.length === 1 ? "transfer" : `${payouts.length}-recipient batch`} prepared; no signature requested.`, at_ms: now }] };
+  return { state: "completed", summary: `Flow prepared an exact Monad Testnet ${asset} ${payouts.length === 1 ? "transfer" : `batch for ${payouts.length} recipients`} and is waiting for explicit wallet approval.`, data: { workflow, agent_version: "flow-vercel-v3", execution_available: false, blocked_reason: "The user must approve and broadcast every exact transaction in their browser wallet." }, latency_ms: Date.now() - started };
 }
 
 function commerce(input: unknown, started: number): CommerceCompletedTask["status"] {

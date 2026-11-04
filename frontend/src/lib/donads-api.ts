@@ -107,6 +107,7 @@ export type PaymentWorkflow = {
     transaction_hash: string;
     submitted_at_ms: number;
   } | null;
+  submissions?: Array<{ payout_index: number; transaction_hash: string; submitted_at_ms: number }>;
   execution: {
     transaction_hash: string;
     block_number: number;
@@ -114,6 +115,9 @@ export type PaymentWorkflow = {
     sender_balance_after_atomic?: string;
     recipient_balance_after_atomic?: string;
   } | null;
+  executions?: Array<{ payout_index: number; transaction_hash: string; block_number: number; confirmed_at_ms: number; sender_balance_after_atomic?: string; recipient_balance_after_atomic?: string }>;
+  total_atomic?: string;
+  estimated_gas_atomic?: string;
   audit_history: Array<{
     sequence: number;
     event: string;
@@ -677,12 +681,13 @@ export async function applyFlowAction(
 export async function confirmFlowTransaction(
   taskId: string,
   transactionHash: string,
+  payoutIndex = 0,
   signal?: AbortSignal,
 ): Promise<FlowCompletedTask> {
   const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-transaction`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transaction_hash: transactionHash }),
+    body: JSON.stringify({ transaction_hash: transactionHash, payout_index: payoutIndex }),
     signal,
   });
   return readJson<FlowCompletedTask>(response);
@@ -691,12 +696,13 @@ export async function confirmFlowTransaction(
 export async function recordFlowSubmission(
   taskId: string,
   transactionHash: string,
+  payoutIndex = 0,
   signal?: AbortSignal,
 ): Promise<FlowCompletedTask> {
   const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/flow-submission`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transaction_hash: transactionHash }),
+    body: JSON.stringify({ transaction_hash: transactionHash, payout_index: payoutIndex }),
     signal,
   });
   return readJson<FlowCompletedTask>(response);

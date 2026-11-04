@@ -58,4 +58,45 @@ contract DonadsEscrowTest {
         require(!success, "unauthorized release succeeded");
         require(uint256(escrow.state()) == 0, "state changed");
     }
+
+    function testFuzzConstructorPreservesFundsAndTerms(uint96 seedAmount, bytes32 seedTerms) public {
+        uint256 amount = uint256(seedAmount) % 10 ether + 1;
+        bytes32 terms = seedTerms == bytes32(0) ? keccak256("non-zero-terms") : seedTerms;
+        DonadsEscrow escrow = new DonadsEscrow{ value: amount }(address(buyer), payable(address(seller)), address(arbiter), uint64(block.timestamp + 1 days), terms);
+        require(escrow.fundedAmount() == amount, "funded amount mismatch");
+        require(address(escrow).balance == amount, "escrow balance mismatch");
+        require(escrow.termsHash() == terms, "terms hash mismatch");
+    }
+}
+
+contract DonadsEscrowInvariantTest {
+    DonadsEscrow private escrow;
+    EscrowActor private buyer;
+    EscrowActor private seller;
+    EscrowActor private arbiter;
+
+    function setUp() public {
+        buyer = new EscrowActor();
+        seller = new EscrowActor();
+        arbiter = new EscrowActor();
+        escrow = new DonadsEscrow{ value: 1 ether }(address(buyer), payable(address(seller)), address(arbiter), uint64(block.timestamp + 30 days), keccak256("invariant-terms"));
+    }
+
+    function targetContracts() public view returns (address[] memory targets) {
+        targets = new address[](1);
+        targets[0] = address(escrow);
+    }
+
+    function invariantFundsMatchLifecycleState() public view {
+        uint256 state = uint256(escrow.state());
+        if (state <= 1) require(address(escrow).balance == escrow.fundedAmount(), "active escrow lost funds");
+        else require(address(escrow).balance == 0, "terminal escrow retained funds");
+    }
+
+    function invariantPartiesAndTermsAreImmutable() public view {
+        require(escrow.buyer() == address(buyer), "buyer changed");
+        require(escrow.seller() == address(seller), "seller changed");
+        require(escrow.arbiter() == address(arbiter), "arbiter changed");
+        require(escrow.termsHash() == keccak256("invariant-terms"), "terms changed");
+    }
 }

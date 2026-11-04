@@ -67,4 +67,12 @@ describe("planUnifiedTask", () => {
     expect(planUnifiedTask("Dispute escrow 0x1111111111111111111111111111111111111111 evidence Package was not delivered")).toEqual({ kind: "escrow_action", escrow: "0x1111111111111111111111111111111111111111", action: "dispute", evidence: "Package was not delivered" });
     expect(planUnifiedTask("Resolve escrow 0x1111111111111111111111111111111111111111 to seller resolution Delivery evidence accepted")).toEqual({ kind: "escrow_action", escrow: "0x1111111111111111111111111111111111111111", action: "resolve_seller", evidence: "Delivery evidence accepted" });
   });
+
+  it("coordinates deliverable verification before preparing an escrow action", () => {
+    expect(planUnifiedTask("Verify escrow 0x1111111111111111111111111111111111111111 with deliverable https://docs.monad.xyz")).toEqual({
+      kind: "escrow_verify",
+      escrow: "0x1111111111111111111111111111111111111111",
+      deliverableUrl: "https://docs.monad.xyz",
+    });
+  });
 });

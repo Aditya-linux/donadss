@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-import { formatEther, getAddress, isAddress } from "viem";
+import { decodeFunctionResult, encodeFunctionData, formatEther, getAddress, isAddress, keccak256, stringToHex } from "viem";
 
 import type {
   CommerceCompletedTask,
@@ -13,8 +13,11 @@ import type {
   ScoutCompletedTask,
   SentinelCompletedTask,
 } from "@/lib/donads-api";
+import { DonadsEscrowAbi, DonadsEscrowDeployedBytecode, DonadsEscrowImmutableReferences } from "@/contracts/generated";
+import { scanFetchedContentForInjection } from "@/server/content-security";
 import { generateGeminiJson } from "@/server/gemini";
-import { readErc20Balance, readErc20Metadata, tokenAmountToAtomic } from "@/server/monad";
+import { monadRpc, readErc20Balance, readErc20Metadata, tokenAmountToAtomic } from "@/server/monad";
+import { assessThreat } from "@/server/threat-intelligence";
 
 type RecordValue = Record<string, unknown>;
 type CompletedStatus =
@@ -92,12 +95,16 @@ async function validatePublicUrl(value: string): Promise<URL> {
 
 async function fetchPublicSource(source: string): Promise<{ url: string; title: string; body: string }> {
   let url = await validatePublicUrl(source);
+  const preflight = assessThreat({ text: url.toString(), urls: [url.toString()] });
+  if (preflight.blocked) throw new Error(`Sentinel blocked this source before retrieval: ${preflight.findings.map((finding) => finding.code).join(", ")}.`);
   for (let redirect = 0; redirect <= 3; redirect += 1) {
     const response = await fetch(url, { redirect: "manual", headers: { "user-agent": "DONADS-Scout/1.0" }, signal: AbortSignal.timeout(10_000) });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location || redirect === 3) throw new Error("Source redirected too many times.");
       url = await validatePublicUrl(new URL(location, url).toString());
+      const redirectPreflight = assessThreat({ text: url.toString(), urls: [url.toString()] });
+      if (redirectPreflight.blocked) throw new Error(`Sentinel blocked a redirect target: ${redirectPreflight.findings.map((finding) => finding.code).join(", ")}.`);
       continue;
     }
     if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
@@ -111,6 +118,96 @@ async function fetchPublicSource(source: string): Promise<{ url: string; title: 
   throw new Error("Source could not be fetched.");
 }
 
+function matchesDonadsEscrowRuntime(code: string): boolean {
+  const actual = code.toLowerCase().replace(/^0x/, "").split("");
+  const expected = DonadsEscrowDeployedBytecode.toLowerCase().replace(/^0x/, "").split("");
+  if (actual.length !== expected.length) return false;
+  for (const references of Object.values(DonadsEscrowImmutableReferences)) {
+    for (const reference of references) {
+      const start = reference.start * 2;
+      const end = start + reference.length * 2;
+      actual.fill("0", start, end);
+      expected.fill("0", start, end);
+    }
+  }
+  return actual.join("") === expected.join("");
+}
+
+async function prepareDeliverableVerification(args: {
+  escrowAddress: string;
+  ownerId: string;
+  deliverableUrl: string;
+  source: ScoutCompletedTask["status"]["data"]["report"]["sources"][number];
+  extractedSummary: string;
+}): Promise<NonNullable<ScoutCompletedTask["status"]["data"]["deliverableVerification"]>> {
+  const escrowAddress = getAddress(args.escrowAddress).toLowerCase();
+  const retrievedAt = args.source.retrievedAt ?? new Date().toISOString();
+  const signals = args.source.securityScreen?.signals ?? (args.source.status === "failed" ? ["SOURCE_RETRIEVAL_FAILED"] : []);
+  const clean = args.source.status === "fetched" && args.source.securityScreen?.passed === true;
+  const evidence = [
+    `Deliverable ${args.deliverableUrl}`,
+    `retrieved ${retrievedAt}`,
+    args.source.contentHash ?? `error ${args.source.error ?? "unavailable"}`,
+    `Sentinel ${clean ? "CLEAN" : signals.join(",") || "BLOCKED"}`,
+  ].join(" | ").slice(0, 500);
+
+  const code = String(await monadRpc("eth_getCode", [escrowAddress, "latest"]));
+  if (!code || code === "0x" || code === "0x0") {
+    return {
+      escrowAddress, deliverableUrl: args.deliverableUrl, contentHash: args.source.contentHash ?? null, retrievedAt,
+      sentinelVerdict: { verdict: clean ? "CLEAN" : "BLOCKED", threatScore: clean ? 0 : 100, signals },
+      extractedSummary: args.extractedSummary, onchain: null, recommendedAction: "none", actionCalldata: null, evidence,
+      blockedReason: "The supplied escrow address has no contract bytecode on Monad Testnet. No financial action was prepared.",
+    };
+  }
+  if (!matchesDonadsEscrowRuntime(code)) {
+    return {
+      escrowAddress, deliverableUrl: args.deliverableUrl, contentHash: args.source.contentHash ?? null, retrievedAt,
+      sentinelVerdict: { verdict: "BLOCKED", threatScore: 100, signals: [...signals, "UNVERIFIED_ESCROW_RUNTIME"] },
+      extractedSummary: args.extractedSummary, onchain: null, recommendedAction: "none", actionCalldata: null, evidence,
+      blockedReason: "The contract runtime does not match the compiled DONADS escrow template. No financial action was prepared.",
+    };
+  }
+
+  async function read(functionName: "state" | "termsHash" | "buyer" | "seller" | "fundedAmount") {
+    const data = encodeFunctionData({ abi: DonadsEscrowAbi, functionName });
+    const result = String(await monadRpc("eth_call", [{ to: escrowAddress, data }, "latest"])) as `0x${string}`;
+    return decodeFunctionResult({ abi: DonadsEscrowAbi, functionName, data: result });
+  }
+  const [stateValue, termsHashValue, buyerValue, sellerValue, fundedAmountValue] = await Promise.all([
+    read("state"), read("termsHash"), read("buyer"), read("seller"), read("fundedAmount"),
+  ]);
+  const state = Number(stateValue);
+  const buyer = String(buyerValue).toLowerCase();
+  const seller = String(sellerValue).toLowerCase();
+  const owner = args.ownerId.toLowerCase();
+  let recommendedAction: "release" | "dispute" | "none" = clean ? "release" : "dispute";
+  let blockedReason: string | null = null;
+  if (state !== 0) {
+    recommendedAction = "none";
+    blockedReason = `Escrow state is ${state}, not Funded (0). No release or dispute action was prepared.`;
+  } else if (recommendedAction === "release" && owner !== buyer) {
+    recommendedAction = "none";
+    blockedReason = "Only the on-chain buyer can release this escrow; the connected wallet does not match the buyer.";
+  } else if (recommendedAction === "dispute" && owner !== buyer && owner !== seller) {
+    recommendedAction = "none";
+    blockedReason = "Only the on-chain buyer or seller can dispute this escrow; the connected wallet is neither party.";
+  }
+  const actionCalldata = recommendedAction === "release"
+    ? encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "release" })
+    : recommendedAction === "dispute"
+      ? encodeFunctionData({ abi: DonadsEscrowAbi, functionName: "raiseDispute", args: [keccak256(stringToHex(evidence))] })
+      : null;
+
+  return {
+    escrowAddress, deliverableUrl: args.deliverableUrl, contentHash: args.source.contentHash ?? null, retrievedAt,
+    sentinelVerdict: { verdict: clean ? "CLEAN" : "BLOCKED", threatScore: clean ? 0 : 100, signals },
+    extractedSummary: args.extractedSummary,
+    onchain: { contractCodeHash: keccak256(code as `0x${string}`), state, termsHash: String(termsHashValue), buyer, seller, fundedAmountAtomic: String(fundedAmountValue) },
+    recommendedAction, actionCalldata, evidence, blockedReason,
+  };
+}
+
 async function scout(input: unknown, started: number, ownerId?: string): Promise<ScoutCompletedTask["status"]> {
   const scoutInput = object(input);
   const sources = stringArray(scoutInput.sources ?? [], "sources").slice(0, 5);
@@ -119,15 +216,20 @@ async function scout(input: unknown, started: number, ownerId?: string): Promise
     return { name: text(item.name, "attachment.name"), mimeType: text(item.mime_type, "attachment.mime_type"), data: text(item.data, "attachment.data") };
   }) : [];
   if (!sources.length && !attachments.length) throw new Error("Scout requires a public source URL or an AI-readable attachment.");
+  const escrowAddress = typeof scoutInput.escrow_address === "string" ? scoutInput.escrow_address.trim() : "";
+  if (escrowAddress && (!ownerId || !isAddress(escrowAddress) || sources.length !== 1)) throw new Error("Deliverable verification requires one valid escrow address, one public URL, and an authenticated wallet.");
   const reportSources: ScoutCompletedTask["status"]["data"]["report"]["sources"] = [];
   const findings: ScoutCompletedTask["status"]["data"]["report"]["findings"] = [];
   await Promise.all(sources.map(async (source, index) => {
     try {
       const fetched = await fetchPublicSource(source);
-      reportSources[index] = { id: index + 1, title: fetched.title, url: fetched.url, status: "fetched", error: null };
-      findings[index] = { text: fetched.body.slice(0, 500) || "The source did not contain readable text.", citations: [index + 1] };
+      if (fetched.body.trim().length < 20) throw new Error("Source did not contain enough readable text to verify.");
+      const retrievedAt = new Date().toISOString();
+      const screen = scanFetchedContentForInjection(fetched.body, fetched.url);
+      reportSources[index] = { id: index + 1, title: fetched.title, url: fetched.url, status: "fetched", error: null, contentHash: screen.content_hash, retrievedAt, securityScreen: { passed: screen.passed, signals: screen.signals, contentHash: screen.content_hash } };
+      if (screen.passed) findings[index] = { text: screen.sanitized_content.slice(0, 500) || "The source did not contain readable text.", citations: [index + 1] };
     } catch (cause) {
-      reportSources[index] = { id: index + 1, title: "Source unavailable", url: source, status: "failed", error: cause instanceof Error ? cause.message : "Fetch failed." };
+      reportSources[index] = { id: index + 1, title: "Source unavailable", url: source, status: "failed", error: cause instanceof Error ? cause.message : "Fetch failed.", contentHash: null, retrievedAt: new Date().toISOString(), securityScreen: { passed: false, signals: ["SOURCE_RETRIEVAL_FAILED"], contentHash: null } };
     }
   }));
   attachments.forEach((attachment, index) => { reportSources.push({ id: sources.length + index + 1, title: attachment.name, url: `attachment:${encodeURIComponent(attachment.name)}`, status: "fetched", error: null }); });
@@ -141,13 +243,19 @@ async function scout(input: unknown, started: number, ownerId?: string): Promise
         schema: { type: "object", properties: { findings: { type: "array", items: { type: "object", properties: { text: { type: "string" }, citations: { type: "array", items: { type: "integer" } } }, required: ["text", "citations"], additionalProperties: false } } }, required: ["findings"], additionalProperties: false },
         attachments,
       });
-      const validIds = new Set(reportSources.filter((source) => source.status === "fetched").map((source) => source.id));
+      const validIds = new Set(reportSources.filter((source) => source.status === "fetched" && source.securityScreen?.passed !== false).map((source) => source.id));
       const checked = enhanced?.findings.filter((finding) => finding.text.trim() && finding.citations.length && finding.citations.every((id) => validIds.has(id)));
       if (checked?.length) validFindings = checked;
     } catch { /* Deterministic cited excerpts remain the fail-closed fallback. */ }
   }
   if (!validFindings.length && attachments.length) throw new Error("Scout could not analyze the attachment. Check the Gemini key, quota, and file format, then retry.");
-  return { state: "completed", summary: `Scout reviewed ${reportSources.filter((source) => source.status === "fetched").length}/${sources.length} supplied sources and produced ${validFindings.length} cited finding(s).`, data: { report: { title: "Source-linked research report", findings: validFindings, sources: reportSources, limitations: "Scout summarizes only the supplied public sources. Verify important claims in the originals." }, agent_version: "scout-vercel-v1", read_only: true }, latency_ms: Date.now() - started };
+  const webScreens = reportSources.filter((source) => source.url.startsWith("http") && source.securityScreen).map((source) => source.securityScreen!);
+  const securityScreen = { passed: webScreens.every((screen) => screen.passed), signals: [...new Set(webScreens.flatMap((screen) => screen.signals))], contentHash: webScreens.length === 1 ? webScreens[0].contentHash : null };
+  const deliverableVerification = escrowAddress
+    ? await prepareDeliverableVerification({ escrowAddress, ownerId: ownerId!, deliverableUrl: sources[0], source: reportSources[0], extractedSummary: validFindings[0]?.text ?? reportSources[0].error ?? "Deliverable could not be verified." })
+    : undefined;
+  const flagged = securityScreen.signals.length;
+  return { state: "completed", summary: flagged ? `Scout reviewed the supplied sources and Sentinel neutralized ${flagged} security signal(s).` : `Scout reviewed ${reportSources.filter((source) => source.status === "fetched").length}/${sources.length} supplied sources and produced ${validFindings.length} cited finding(s).`, data: { report: { title: "Source-linked research report", findings: validFindings, sources: reportSources, limitations: "Scout summarizes only supplied public sources after deterministic security screening. Verify important claims in the originals." }, agent_version: "scout-vercel-v2", read_only: true, securityScreen, ...(deliverableVerification ? { deliverableVerification } : {}) }, latency_ms: Date.now() - started };
 }
 
 function addDays(date: string, days: number): string {

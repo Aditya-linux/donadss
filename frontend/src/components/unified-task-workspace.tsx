@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, ChevronRight, CircleDollarSign, Clock3, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Workflow, X } from "lucide-react";
+import { ArrowUp, BadgeCheck, ChevronRight, CircleDollarSign, Clock3, Code2, ExternalLink, FileText, ImageIcon, Megaphone, Paperclip, Radar, ShieldCheck, ShoppingBag, Sparkles, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { decodeFunctionResult, encodeDeployData, encodeFunctionData, getAddress, keccak256, stringToHex } from "viem";
@@ -11,6 +11,7 @@ import {
   applyFlowAction,
   applyOperatorAction,
   confirmFlowTransaction,
+  confirmEscrowVerification,
   confirmSwapTransaction,
   createFlowTask,
   createGrowthTask,
@@ -20,6 +21,7 @@ import {
   getSwapQuote,
   type CompletedTask,
   type FlowCompletedTask,
+  type ScoutCompletedTask,
   type AiAttachmentInput,
   type OperatorStepInput,
   type Task,
@@ -65,14 +67,12 @@ function currentIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-const examples = [
-  "Research https://monad.xyz and summarize the key facts",
-  "Research https://monad.xyz and create a 7-day launch campaign",
-  "Scan this contract bytecode: 0x6000ff",
-  "Send 0.01 MON to 0xYOUR_WALLET_ADDRESS for testing",
-  "Deploy my policy vault",
-  "Create escrow 1 MON for 0xSELLER with arbiter 0xARBITER refund after 24 hours terms Product delivered as agreed",
-];
+const demoStarters = [
+  { eyebrow: "Proof before payment", title: "Verify an escrow deliverable", description: "Scout hashes the evidence. Sentinel screens it. Flow prepares the exact next action.", agents: "Scout → Sentinel → Flow", prompt: "Verify escrow 0xESCROW with deliverable https://docs.monad.xyz", icon: BadgeCheck },
+  { eyebrow: "Two specialists, one brief", title: "Research, then launch", description: "Turn verified Monad sources into a cited seven-day developer campaign.", agents: "Scout → Growth", prompt: "Research https://monad.xyz and https://docs.monad.xyz, then create a seven-day developer launch campaign based only on verified citations.", icon: Sparkles },
+  { eyebrow: "Deterministic security", title: "Expose bytecode risk", description: "Trace dangerous opcodes without asking a model to guess what the contract does.", agents: "Sentinel", prompt: "Scan this EVM bytecode and explain every deterministic security signal: 0x326000f46000f2ff", icon: ShieldCheck },
+  { eyebrow: "Policy-controlled autonomy", title: "Deploy your agent vault", description: "Create the owner-controlled boundary for future expiring session permissions.", agents: "Flow → Sentinel", prompt: "Deploy my policy vault", icon: Workflow },
+] as const;
 
 const specialistIcons = {
   scout: Radar,
@@ -120,6 +120,36 @@ function TransactionLinks({ hashes }: { hashes?: string[] }) {
   </a>)}</div>;
 }
 
+function DeterministicVerification({ action, payer, recipient, value, atomicUnits, selector, expectedDelta }: { action: string; payer: string; recipient: string; value: string; atomicUnits: string; selector: string; expectedDelta: string }) {
+  return <details className="group rounded-xl border border-border bg-background">
+    <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden">
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted"><Code2 className="size-4" aria-hidden="true" /></span>
+      <span className="min-w-0 flex-1">Deterministic verification &amp; calldata diff</span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+    </summary>
+    <div className="grid gap-px border-t border-border bg-border md:grid-cols-2">
+      <section className="min-w-0 bg-card p-4"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Human intent</p><dl className="mt-3 space-y-3 text-xs"><div><dt className="text-muted-foreground">Action</dt><dd className="mt-1 font-medium">{action}</dd></div><div><dt className="text-muted-foreground">Network</dt><dd className="mt-1">Monad Testnet <span className="font-mono">10143</span></dd></div><div><dt className="text-muted-foreground">Payer</dt><dd className="mt-1 break-all font-mono">{payer}</dd></div><div><dt className="text-muted-foreground">Target</dt><dd className="mt-1 break-all font-mono">{recipient}</dd></div><div><dt className="text-muted-foreground">Value</dt><dd className="mt-1 font-mono tabular-nums">{value}</dd></div><div><dt className="text-muted-foreground">Expected balance delta</dt><dd className="mt-1 leading-5">{expectedDelta}</dd></div></dl></section>
+      <section className="min-w-0 bg-card p-4"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Machine proof</p><dl className="mt-3 space-y-3 text-xs"><div><dt className="text-muted-foreground">Function selector</dt><dd className="mt-1 break-all font-mono">{selector}</dd></div><div><dt className="text-muted-foreground">Atomic units</dt><dd className="mt-1 break-all font-mono tabular-nums">{atomicUnits}</dd></div></dl><div className="mt-4 space-y-2"><p className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs font-medium"><BadgeCheck className="size-4 shrink-0" aria-hidden="true" />LLM bypassed · deterministic parser verified</p><p className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs font-medium"><ShieldCheck className="size-4 shrink-0" aria-hidden="true" />Sentinel passed network, sender, target, asset and amount</p></div></section>
+    </div>
+  </details>;
+}
+
+function EscrowVerificationCard({ task, working, onExecute }: { task: ScoutCompletedTask; working: boolean; onExecute: () => void }) {
+  const verification = task.status.data.deliverableVerification;
+  if (!verification) return null;
+  const clean = verification.sentinelVerdict.verdict === "CLEAN";
+  const executed = verification.execution;
+  const action = verification.recommendedAction;
+  return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Deliverable evidence</p><h3 className="mt-1 font-medium">Escrow evidence checkpoint</h3></div><span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${clean ? "bg-muted" : "bg-destructive/10 text-destructive"}`}>{clean ? "Screened · SHA-256 recorded" : "Injection or retrieval risk neutralized"}</span></div>
+    <div className="grid gap-2 sm:grid-cols-2"><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Deliverable</p><p className="mt-1 break-all text-xs">{verification.deliverableUrl}</p><p className="mt-2 break-all font-mono text-[11px] text-muted-foreground">{verification.contentHash ?? "No content hash available"}</p></div><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Recommendation</p><p className="mt-1 text-sm font-medium capitalize">{action === "none" ? "No transaction" : `${action} escrow`}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{verification.blockedReason ?? verification.extractedSummary}</p></div></div>
+    {verification.onchain ? <DeterministicVerification action={action === "release" ? "Escrow release" : action === "dispute" ? "Escrow dispute" : "Escrow inspection"} payer={verification.onchain.buyer} recipient={verification.escrowAddress} value="0 MON" atomicUnits="0" selector={verification.actionCalldata?.slice(0, 10) ?? "No action prepared"} expectedDelta={action === "release" ? `${verification.onchain.fundedAmountAtomic} atomic MON leaves escrow for the verified seller.` : action === "dispute" ? "No MON moves; the evidence hash changes escrow state to Disputed." : "No balance or state change is permitted."} /> : null}
+    <p className="text-xs leading-5 text-muted-foreground">The hash and Sentinel screen prove what DONADS fetched and inspected. You must still decide whether the deliverable satisfies the escrow terms before approving a release.</p>
+    {verification.sentinelVerdict.signals.length ? <p role="alert" className="rounded-lg bg-destructive/5 p-3 text-xs leading-5 text-destructive">Sentinel signals: {verification.sentinelVerdict.signals.join(", ")}</p> : null}
+    {executed ? <div className="rounded-lg bg-muted p-3 text-xs"><p className="font-medium">Verified on Monad Testnet</p><p className="mt-1 break-all font-mono text-muted-foreground">{executed.transactionHash}</p></div> : action !== "none" ? <button type="button" disabled={working} aria-busy={working} onClick={onExecute} className="min-h-11 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-50">{working ? "Waiting for wallet…" : `Review and ${action} in wallet`}</button> : null}
+  </div>;
+}
+
 function fileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
 }
@@ -132,23 +162,25 @@ function FlowIntentCard({ task, working, onApprove, onReject }: { task: FlowComp
     <div className="flex items-center justify-between gap-3"><span className="font-medium">Exact Monad Testnet {workflow.payouts.length > 1 ? "batch" : "intent"}</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px] capitalize">{workflow.state.replaceAll("_", " ")}</span></div>
     <div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Total approved value</p><p className="mt-1 font-mono text-base font-semibold tabular-nums">{workflow.totals[0]?.amount} {workflow.totals[0]?.asset}</p><p className="mt-1 text-[11px] text-muted-foreground">{workflow.payouts.length} recipient{workflow.payouts.length === 1 ? "" : "s"} · {executions.length}/{workflow.payouts.length} receipts verified</p></div>
     <ol className="max-h-56 space-y-2 overflow-y-auto">{workflow.payouts.map((payout, index) => <li key={`${payout.recipient_address}-${index}`} className="rounded-lg border border-border p-3"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium">Recipient {index + 1}</span><span className="font-mono text-xs tabular-nums">{payout.amount} {payout.asset}</span></div><p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{payout.recipient_address}</p>{payout.token_contract ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">Token {payout.token_contract}</p> : null}</li>)}</ol>
+    <DeterministicVerification action={workflow.transfer_kind === "erc20" ? "ERC-20 transfer" : workflow.payouts.length > 1 ? "Native MON batch" : "Native MON transfer"} payer={getAddress(workflow.payer)} recipient={workflow.payouts.length > 1 ? `${workflow.payouts.length} individually verified recipients` : getAddress(workflow.payouts[0].recipient_address)} value={`${workflow.totals[0]?.amount} ${workflow.totals[0]?.asset}`} atomicUnits={workflow.total_atomic ?? workflow.payouts[0].amount_atomic ?? BigInt(monToWeiHex(workflow.payouts[0].amount)).toString()} selector={workflow.transfer_kind === "erc20" ? "0xa9059cbb · transfer(address,uint256)" : "0x · empty calldata enforced"} expectedDelta={`Payer −${workflow.totals[0]?.amount} ${workflow.totals[0]?.asset}; every recipient receives only its listed amount.`} />
     <p className="text-xs leading-5 text-muted-foreground">Your wallet confirms each exact transaction separately. DONADS completes the batch only after every mined receipt matches its approved recipient and amount.</p>
     {actionable ? <div className="flex flex-wrap gap-2"><button type="button" disabled={working} aria-busy={working} onClick={onApprove} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : workflow.state === "submitted" ? "Verify submitted transactions" : `Review and send ${workflow.payouts.length} transaction${workflow.payouts.length === 1 ? "" : "s"}`}</button>{workflow.state === "awaiting_approval" ? <button type="button" disabled={working} onClick={onReject} className="min-h-10 rounded-lg border border-border px-3 text-xs font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">Reject</button> : null}</div> : null}
     {executions.map((execution) => <a key={execution.transaction_hash} href={`${MONAD_TESTNET_EXPLORER}/tx/${execution.transaction_hash}`} target="_blank" rel="noreferrer" className="mr-3 inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4">Receipt {execution.payout_index + 1} <ExternalLink className="size-3.5" aria-hidden="true" /></a>)}
   </div>;
 }
 
-function SwapQuoteCard({ quote, working, onExecute }: { quote: SwapQuote; working: boolean; onExecute: () => void }) {
+function SwapQuoteCard({ quote, working, walletAddress, onExecute }: { quote: SwapQuote; working: boolean; walletAddress: string | null; onExecute: () => void }) {
   return <div className="mt-3 space-y-3 rounded-xl border border-border bg-card p-4">
     <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">Uniswap v3 simulation</span><span className="rounded-full bg-muted px-2.5 py-1 font-mono text-[11px]">Monad Testnet</span></div>
     <div className="grid gap-2 sm:grid-cols-2"><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Input</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_in.amount} {quote.token_in.symbol}</p></div><div className="rounded-lg bg-muted p-3"><p className="text-[11px] text-muted-foreground">Quoted output</p><p className="mt-1 font-mono text-sm tabular-nums">{quote.token_out.quoted_amount} {quote.token_out.symbol}</p></div></div>
     <dl className="grid grid-cols-2 gap-2 text-xs"><div><dt className="text-muted-foreground">Minimum output</dt><dd className="mt-1 font-mono">{quote.token_out.minimum_amount} {quote.token_out.symbol}</dd></div><div><dt className="text-muted-foreground">Estimated impact</dt><dd className="mt-1 font-mono">{(quote.estimated_price_impact_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Max slippage</dt><dd className="mt-1 font-mono">{(quote.slippage_bps / 100).toFixed(2)}%</dd></div><div><dt className="text-muted-foreground">Pool fee</dt><dd className="mt-1 font-mono">{(quote.fee / 10_000).toFixed(2)}%</dd></div></dl>
+    <DeterministicVerification action="Exact-input token swap" payer={walletAddress ? getAddress(walletAddress) : "Connected wallet required"} recipient={getAddress(quote.router)} value={`${quote.token_in.amount} ${quote.token_in.symbol}`} atomicUnits={quote.token_in.amount_atomic} selector={`${quote.swap_calldata.slice(0, 10)} · exactInputSingle`} expectedDelta={`Input −${quote.token_in.amount} ${quote.token_in.symbol}; output at least +${quote.token_out.minimum_amount} ${quote.token_out.symbol}.`} />
     {quote.blocked ? <p role="alert" className="rounded-lg bg-destructive/5 p-3 text-xs leading-5 text-destructive">{quote.blocked_reason}</p> : quote.execution ? <div className="rounded-lg bg-muted p-3 text-xs leading-5"><p className="font-medium">Verified swap completed</p><p className="mt-1 font-mono break-all text-muted-foreground">{quote.execution.swap_transaction_hash}</p></div> : <div className="space-y-2"><p className="rounded-lg bg-muted p-3 text-xs leading-5 text-muted-foreground">Quote passed policy. Your wallet will approve only the exact input amount, then submit the exact minimum-output swap.</p><button type="button" disabled={working} onClick={onExecute} className="min-h-10 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50">{working ? "Working…" : "Approve token and execute swap"}</button></div>}
     <a href={quote.source} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 text-xs font-medium underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring">Official deployment source <ExternalLink className="size-3.5" aria-hidden="true" /></a>
   </div>;
 }
 
-export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigured = false, initialTask = null, onTaskCompleted }: { signedIn: boolean; walletAddress?: string | null; aiConfigured?: boolean; initialTask?: Task | null; onTaskCompleted?: () => void }) {
+export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigured = false, initialTask = null, addressSuggestions = [], onTaskCompleted }: { signedIn: boolean; walletAddress?: string | null; aiConfigured?: boolean; initialTask?: Task | null; addressSuggestions?: Array<{ label: string; address: string }>; onTaskCompleted?: () => void }) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -158,9 +190,22 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewUrls = useRef(new Set<string>());
 
   useEffect(() => () => { previewUrls.current.forEach((url) => URL.revokeObjectURL(url)); }, []);
+
+  function insertAddress(address: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? prompt.length;
+    const end = textarea?.selectionEnd ?? prompt.length;
+    const prefix = start > 0 && !/\s$/.test(prompt.slice(0, start)) ? " " : "";
+    const suffix = end < prompt.length && !/^\s/.test(prompt.slice(end)) ? " " : "";
+    const next = `${prompt.slice(0, start)}${prefix}${address}${suffix}${prompt.slice(end)}`;
+    const cursor = start + prefix.length + address.length + suffix.length;
+    setPrompt(next);
+    window.requestAnimationFrame(() => { textarea?.focus(); textarea?.setSelectionRange(cursor, cursor); });
+  }
 
   async function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const chosen = Array.from(event.target.files ?? []);
@@ -219,6 +264,15 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
       plan = (await planAiTask(value, modelAttachments)).plan;
       onTaskCompleted?.();
       if (plan.kind === "clarify") { const message = plan.message; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]); return; }
+      if (plan.kind === "escrow_verify") {
+        setProgress("Sentinel and Scout are screening and hashing the deliverable…");
+        const queued = await createScoutTask(`Verify deliverable evidence from ${plan.deliverableUrl}`, signal, [], { escrowAddress: plan.escrow });
+        const verified = await waitForTask(queued.id, (task) => setProgress(task.events.at(-1)?.message ?? "Flow is checking the escrow contract state…"), signal);
+        if (verified.bot !== "scout") throw new Error("Escrow verification returned an unexpected specialist result.");
+        setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: taskResponseText(verified), task: verified }]);
+        onTaskCompleted?.();
+        return;
+      }
       if (plan.kind === "vault_deploy" || plan.kind === "session_configure" || plan.kind === "session_revoke" || plan.kind === "escrow_create" || plan.kind === "escrow_action") {
         if (!walletAddress) throw new Error("Reconnect your wallet before preparing this contract action.");
         const provider = await connectWalletProvider();
@@ -477,6 +531,32 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
     }
   }
 
+  async function executeEscrowVerification(messageId: string, task: ScoutCompletedTask) {
+    const verification = task.status.data.deliverableVerification;
+    if (!verification || verification.recommendedAction === "none" || !verification.actionCalldata || verification.execution) return;
+    const startedAt = currentTimeMs();
+    setWorking(true);
+    setError(null);
+    try {
+      setProgress(`Flow is requesting the exact escrow ${verification.recommendedAction} approval…`);
+      const provider = await connectWalletProvider();
+      await ensureMonadTestnet(provider);
+      const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+      const from = accounts[0];
+      if (!from || !walletAddress || from.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Connected wallet does not match the wallet that verified this deliverable.");
+      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from, to: verification.escrowAddress, data: verification.actionCalldata, value: "0x0" }] }) as string;
+      await waitForWalletReceipt(provider, hash);
+      setProgress("Flow is matching the mined receipt to the screened escrow action…");
+      const confirmed = await confirmEscrowVerification(task.id, hash);
+      setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: taskResponseText(confirmed), task: confirmed, durationMs: currentTimeMs() - startedAt, transactionHashes: [hash] } : message));
+      onTaskCompleted?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The escrow action could not be completed.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   function updateSwapMessage(messageId: string, quote: SwapQuote, durationMs?: number, transactionHashes?: string[]) {
     setMessages((current) => current.map((message) => message.id === messageId ? { ...message, text: quote.execution ? "Flow verified the completed Uniswap v3 swap and its balance changes." : message.text, swapQuote: quote, durationMs, transactionHashes } : message));
     onTaskCompleted?.();
@@ -556,14 +636,18 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
   return (
     <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
       {working ? <MascotLoader label={progress} /> : null}
-      <div className="donads-workspace-width mx-auto flex w-full flex-1 flex-col px-4 pb-40 pt-6 sm:px-6 sm:pt-8 2xl:px-8 2xl:pt-10">
+      <div className="donads-workspace-width mx-auto flex w-full flex-1 flex-col px-4 pb-52 pt-6 sm:px-6 sm:pt-8 2xl:px-8 2xl:pt-10">
         {!messages.length ? (
-          <section className="my-auto flex w-full min-w-0 flex-col items-center py-12 text-center">
+          <section className="my-auto flex w-full min-w-0 flex-col items-center py-10 text-center sm:py-12">
             <Mascot size={120} />
             <h1 className="mt-7 max-w-full text-balance text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">What should DONADS complete?</h1>
-            <p className="mt-4 max-w-xl text-pretty text-sm leading-6 text-muted-foreground">One request in. The right specialists coordinate behind the scenes, with wallet approval reserved for you.</p>
-            <div className="mt-8 grid w-full min-w-0 gap-2 sm:grid-cols-2">
-              {examples.map((example) => <button key={example} type="button" onClick={() => setPrompt(example)} className="min-w-0 break-words rounded-xl border border-border bg-card p-3 text-left text-xs leading-5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">{example}</button>)}
+            <p className="mt-4 max-w-xl text-pretty text-sm leading-6 text-muted-foreground">Choose a mission. DONADS assembles the specialists, proves what they checked, and stops at the exact moment your wallet must decide.</p>
+            <div className="mt-8 grid w-full min-w-0 gap-3 sm:grid-cols-2">
+              {demoStarters.map((starter, index) => { const Icon = starter.icon; return <button key={starter.title} type="button" onClick={() => { setPrompt(starter.prompt); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} className={`group relative min-h-44 min-w-0 overflow-hidden rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-[transform,background-color,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-0 motion-reduce:transition-none ${index === 0 ? "sm:col-span-2 sm:grid sm:min-h-48 sm:grid-cols-[1fr_auto] sm:items-end" : ""}`}>
+                <span className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-brand-accent opacity-70" aria-hidden="true" />
+                <span className="relative block"><span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"><span className="grid size-8 place-items-center rounded-lg bg-muted text-foreground"><Icon className="size-4" aria-hidden="true" /></span>{starter.eyebrow}</span><span className="mt-5 block text-xl font-semibold tracking-tight">{starter.title}</span><span className="mt-2 block max-w-xl text-xs leading-5 text-muted-foreground">{starter.description}</span></span>
+                <span className={`relative mt-5 flex items-center justify-between gap-3 border-t border-border pt-3 text-[11px] ${index === 0 ? "sm:ml-8 sm:mt-0 sm:w-48 sm:flex-col sm:items-end sm:border-l sm:border-t-0 sm:pl-8 sm:pt-0" : ""}`}><span className="font-mono text-muted-foreground">{starter.agents}</span><span className="inline-flex items-center gap-1 font-medium">Start mission <ArrowUp className="size-3.5 rotate-45 transition-transform duration-150 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5 motion-reduce:transition-none" aria-hidden="true" /></span></span>
+              </button>; })}
             </div>
           </section>
         ) : (
@@ -572,8 +656,9 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
               {message.role === "assistant" ? <span className="mt-0.5 shrink-0">{message.task ? <SpecialistMark icon={specialistIcons[message.task.bot]} size={32} /> : <MascotMark size={32} />}</span> : null}
               <div className="min-w-0">
                 <p className="whitespace-pre-wrap">{message.text}</p>
-                {message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}
+                {message.swapQuote ? <SwapQuoteCard quote={message.swapQuote} working={working} walletAddress={walletAddress} onExecute={() => void executeSwap(message.id, message.swapQuote!)} /> : null}
                 {message.task?.bot === "flow" ? <FlowIntentCard task={message.task} working={working} onApprove={() => void authorizeFlow(message.id, message.task as FlowCompletedTask)} onReject={() => void rejectFlow(message.id, message.task as FlowCompletedTask)} /> : null}
+                {message.task?.bot === "scout" && message.task.status.data.deliverableVerification ? <EscrowVerificationCard task={message.task} working={working} onExecute={() => void executeEscrowVerification(message.id, message.task as ScoutCompletedTask)} /> : null}
                 <TransactionLinks hashes={message.transactionHashes} />
                 <TaskTiming task={message.task} durationMs={message.durationMs} />
                 {message.task && shouldOfferPdf(message.task) ? <div className="mt-3"><ReportDownloadButton task={message.task} /></div> : null}
@@ -584,6 +669,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
         {error ? <p role="alert" className="mt-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</p> : null}
       </div>
       <div className="donads-composer-frame fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background to-transparent px-3 pt-10 sm:px-6 2xl:pt-12">
+        {addressSuggestions.length ? <div className="donads-workspace-width mx-auto mb-2 flex max-w-full gap-2 overflow-x-auto pb-1" aria-label="Quick insert wallet addresses">{addressSuggestions.map((item) => <button key={`${item.label}-${item.address}`} type="button" onClick={() => insertAddress(item.address)} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-[11px] font-medium shadow-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px"><span aria-hidden="true">+</span>{item.label}<span className="font-mono text-muted-foreground">{item.address.slice(0, 6)}…{item.address.slice(-4)}</span></button>)}</div> : null}
         <form onSubmit={submit} className="donads-workspace-width mx-auto w-full min-w-0 rounded-2xl border border-border bg-card p-2 shadow-lg" aria-describedby={attachmentError ? "attachment-error" : undefined}>
           {attachments.length ? <ul className="flex flex-wrap gap-2 border-b border-border px-1 pb-2" aria-label="Selected attachments">{attachments.map((attachment) => <li key={attachment.id} className="flex max-w-full items-center gap-2 rounded-lg bg-muted p-1.5 pr-1 text-xs">{attachment.previewUrl ? <Image src={attachment.previewUrl} alt="" width={32} height={32} unoptimized className="size-8 rounded-md object-cover" /> : <span className="grid size-8 place-items-center rounded-md bg-card"><FileText className="size-4" aria-hidden="true" /></span>}<span className="max-w-40 truncate">{attachment.file.name}</span><button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={`Remove ${attachment.file.name}`} className="grid size-10 place-items-center rounded-md hover:bg-card focus-visible:ring-2 focus-visible:ring-ring"><X className="size-4" aria-hidden="true" /></button></li>)}</ul> : null}
           {attachmentError ? <div id="attachment-error" role="alert" className="mx-1 mt-1 flex items-start gap-2 rounded-lg bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive"><ImageIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{attachmentError}</span></div> : null}
@@ -592,7 +678,7 @@ export function UnifiedTaskWorkspace({ signedIn, walletAddress = null, aiConfigu
             <input ref={fileInput} id="task-attachments" type="file" multiple onChange={(event) => void selectFiles(event)} className="sr-only" />
             <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} disabled={working || attachments.length >= MAX_ATTACHMENTS} className="grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-40"><Paperclip className="size-5" aria-hidden="true" /></button>
             <label className="sr-only" htmlFor="unified-task">Ask DONADS to complete a task</label>
-            <textarea id="unified-task" rows={2} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Describe the outcome, sources, and constraints…" className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-1 py-3 text-sm outline-none focus-visible:ring-0" />
+            <textarea ref={textareaRef} id="unified-task" rows={2} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Describe the outcome, sources, and constraints…" className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-1 py-3 text-sm outline-none focus-visible:ring-0" />
             <button type="submit" aria-label="Start task" disabled={!prompt.trim() || working} className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-40"><ArrowUp className="size-5" aria-hidden="true" /></button>
           </div>
         </form>

@@ -9,5 +9,9 @@ for (const name of contracts) {
   const artifact = JSON.parse(await readFile(path, "utf8"));
   output.push(`export const ${name}Abi = ${JSON.stringify(artifact.abi)} as const;\n`);
   output.push(`export const ${name}Bytecode = ${JSON.stringify(artifact.bytecode)} as \`0x${"${string}"}\`;\n`);
+  if (name === "DonadsEscrow") {
+    output.push(`export const ${name}DeployedBytecode = ${JSON.stringify(artifact.deployedBytecode)} as \`0x${"${string}"}\`;\n`);
+    output.push(`export const ${name}ImmutableReferences = ${JSON.stringify(artifact.immutableReferences ?? {})} as const;\n`);
+  }
 }
 await writeFile(resolve("../frontend/src/contracts/generated.ts"), `${output.join("\n")}\n`, "utf8");

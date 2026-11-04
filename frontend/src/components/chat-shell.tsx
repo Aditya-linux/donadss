@@ -7,7 +7,7 @@ import { UnifiedTaskWorkspace } from "@/components/unified-task-workspace";
 import { createAuthChallenge, createTelegramConnection, deleteTaskHistory, getAiUsage, getPushConfig, getTask, getTelegramConnection, getWalletBalance, getWalletTokenBalances, listPendingApprovals, listTaskHistory, removeTelegramConnection, restoreWalletSession, revokeWalletSession, setAccessToken, type AiUsage, type Task, type TelegramConnection, type TokenBalance, type WalletBalance, verifyWalletSignature } from "@/lib/donads-api";
 import type { PendingApproval } from "@/lib/approvals";
 import { canDeleteTaskHistory, taskDisplayTitle } from "@/lib/task-history";
-import { connectWalletProvider, disconnectWalletProvider, WalletConnectionCancelledError } from "@/lib/wallet-provider";
+import { connectWalletProvider, disconnectWalletProvider, walletConnectionMessage, WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import { currentPushSubscription, disablePushNotifications, enablePushNotifications, pushFailureMessage, pushSupported } from "@/lib/push-client";
 
 const specialists = [
@@ -40,6 +40,21 @@ function SpecialistDialog({ specialist, onClose }: { specialist: Specialist; onC
 }
 
 function resetLabel(resetsAtMs: number): string { const minutes = Math.max(0, Math.ceil((resetsAtMs - Date.now()) / 60_000)); return `${Math.floor(minutes / 60)}h ${minutes % 60}m`; }
+
+export function taskAddressSuggestions(tasks: Task[], wallet: string | null): Array<{ label: string; address: string }> {
+  const suggestions: Array<{ label: string; address: string }> = [];
+  const seen = new Set<string>();
+  const add = (label: string, address: string) => { const normalized = address.toLowerCase(); if (!seen.has(normalized)) { seen.add(normalized); suggestions.push({ label, address }); } };
+  if (wallet) add("Connected wallet", wallet);
+  for (const task of tasks) {
+    const addresses = JSON.stringify({ prompt: task.prompt, input: task.input, status: task.status }).match(/0x[a-fA-F0-9]{40}\b/g) ?? [];
+    const prompt = task.prompt.toLowerCase();
+    const label = prompt.includes("escrow") ? "Active escrow" : prompt.includes("vault") ? "My vault" : prompt.includes("token") ? "Verified token" : "Last recipient";
+    addresses.forEach((address) => add(label, address));
+    if (suggestions.length >= 4) break;
+  }
+  return suggestions.slice(0, 4);
+}
 
 function ApprovalDialog({ approvals, onClose, onReview }: { approvals: PendingApproval[]; onClose: () => void; onReview: (approval: PendingApproval) => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -180,7 +195,7 @@ export function ChatShell() {
     try { const provider = await connectWalletProvider(); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
     catch (error) {
       setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setHistoryReady(true);
-      if (!(error instanceof WalletConnectionCancelledError)) setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed.");
+      if (!(error instanceof WalletConnectionCancelledError)) setAuthError(walletConnectionMessage(error));
     }
     finally { setSigningIn(false); }
   }
@@ -238,7 +253,7 @@ export function ChatShell() {
         </div>
       </header>
       {authError || approvalError ? <div role="alert" className="flex items-center justify-between gap-3 border-b border-border px-5 py-2 text-xs text-destructive"><span>{authError ?? approvalError}</span>{authError ? <button type="button" onClick={() => void signIn()} className="min-h-10 px-3 font-medium underline focus-visible:ring-2 focus-visible:ring-ring">Try again</button> : <button type="button" onClick={() => setApprovalError(null)} className="min-h-10 px-3 font-medium underline focus-visible:ring-2 focus-visible:ring-ring">Dismiss</button>}</div> : null}
-      <UnifiedTaskWorkspace key={workspaceKey} signedIn={Boolean(signedInWallet)} walletAddress={signedInWallet} aiConfigured={Boolean(aiUsage?.configured)} initialTask={selectedTask} onTaskCompleted={() => void loadWalletData()} />
+      <UnifiedTaskWorkspace key={workspaceKey} signedIn={Boolean(signedInWallet)} walletAddress={signedInWallet} aiConfigured={Boolean(aiUsage?.configured)} initialTask={selectedTask} addressSuggestions={taskAddressSuggestions(history, signedInWallet)} onTaskCompleted={() => void loadWalletData()} />
     </div>
   </div>;
 }

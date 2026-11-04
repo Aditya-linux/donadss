@@ -10,7 +10,11 @@ export function taskResponseText(task: CompletedTask): string {
     const { report } = task.status.data;
     const findings = report.findings.slice(0, 6).map((finding) => `• ${concise(finding.text)} ${finding.citations.map((id) => `[${id}]`).join(" ")}`);
     const sources = report.sources.filter((source) => source.status === "fetched").map((source) => `[${source.id}] ${source.title} — ${source.url}`);
-    return ["Here are the key findings:", ...findings, "", "Sources", ...sources, "", report.limitations].join("\n");
+    const screen = task.status.data.securityScreen;
+    const shield = screen?.passed ? "Shield: Prompt-Injection & Phishing Screened (SHA-256 Verified)" : screen ? "Warning: Indirect Prompt-Injection Attempt Neutralized in Source" : null;
+    const verification = task.status.data.deliverableVerification;
+    const escrow = verification ? ["", "Escrow deliverable check", `Recommended action: ${verification.recommendedAction}.`, `Evidence hash: ${verification.contentHash ?? "unavailable"}.`, verification.blockedReason ?? `Sentinel verdict: ${verification.sentinelVerdict.verdict}. Review the deterministic checkpoint before signing.`] : [];
+    return [shield, "Here are the key findings:", ...(findings.length ? findings : ["â€¢ No source text was allowed into summarization."]), "", "Sources", ...sources, ...escrow, "", report.limitations].filter((line) => line !== null).join("\n");
   }
 
   if (task.bot === "growth") {

@@ -11,6 +11,7 @@ export type UnifiedPlan =
   | { kind: "session_configure"; sessionKey: string; vault: string; recipient: string; perTransaction: string; daily: string; durationHours: number }
   | { kind: "session_revoke"; sessionKey: string; vault: string }
   | { kind: "escrow_create"; amount: string; seller: string; arbiter: string; refundHours: number; terms: string }
+  | { kind: "escrow_verify"; escrow: string; deliverableUrl: string }
   | { kind: "escrow_action"; escrow: string; action: "release" | "cooperative_refund" | "timeout_refund" | "dispute" | "resolve_seller" | "resolve_buyer"; evidence: string | null }
   | { kind: "clarify"; message: string };
 
@@ -33,10 +34,12 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const configureSession = prompt.match(/\ballow\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})\s+to\s+send\s+up\s+to\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+transaction\s+and\s+(\d+(?:\.\d{1,18})?)\s+MON\s+per\s+day\s+for\s+(\d{1,4})\s+hours?\s+to\s+(0x[0-9a-fA-F]{40})/i);
   const revokeSession = prompt.match(/\brevoke\s+session\s+(0x[0-9a-fA-F]{40})\s+on\s+vault\s+(0x[0-9a-fA-F]{40})/i);
   const escrowAddress = prompt.match(/\bescrow\s+(0x[0-9a-fA-F]{40})\b/i)?.[1];
+  const verifyEscrow = prompt.match(/\bverify\s+escrow\s+(0x[0-9a-fA-F]{40})\s+with\s+deliverable\s+(https?:\/\/[^\s<>"']+)/i);
 
   if (!prompt) return { kind: "clarify", message: "Describe the outcome you want DONADS to complete." };
   if (/\bdeploy\s+(?:my\s+)?policy\s+vault\b/i.test(prompt)) return { kind: "vault_deploy" };
   if (escrow) return { kind: "escrow_create", amount: escrow[1], seller: escrow[2], arbiter: escrow[3], refundHours: Number(escrow[4]), terms: escrow[5].trim() };
+  if (verifyEscrow) return { kind: "escrow_verify", escrow: verifyEscrow[1], deliverableUrl: verifyEscrow[2].replace(/[),.;!?]+$/g, "") };
   if (escrowAddress && /\brelease\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "release", evidence: null };
   if (escrowAddress && /\bcooperative\s+refund\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "cooperative_refund", evidence: null };
   if (escrowAddress && /\btimeout\s+refund\s+escrow\b/i.test(prompt)) return { kind: "escrow_action", escrow: escrowAddress, action: "timeout_refund", evidence: null };

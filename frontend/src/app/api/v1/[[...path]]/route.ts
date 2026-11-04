@@ -12,6 +12,7 @@ import type {
   OperatorCompletedTask,
   OperatorRoutine,
   OperatorTaskInput,
+  ScoutCompletedTask,
   Task,
 } from "@/lib/donads-api";
 import { authenticate, createChallenge, logout, SESSION_COOKIE, verifyChallenge } from "@/server/auth";
@@ -215,6 +216,33 @@ async function confirmFlow(ownerId: string, id: string, request: Request): Promi
   return json(task);
 }
 
+async function confirmEscrowVerification(ownerId: string, id: string, request: Request): Promise<Response> {
+  const task = await ownedTask(ownerId, id) as ScoutCompletedTask;
+  if (task.bot !== "scout" || task.status.state !== "completed") throw new Error("Escrow verification task not found.");
+  const verification = task.status.data.deliverableVerification;
+  if (!verification || verification.recommendedAction === "none" || !verification.actionCalldata) throw new Error("No approved escrow action is prepared for this verification.");
+  const payload = await body(request);
+  const hash = typeof payload.transaction_hash === "string" ? payload.transaction_hash.toLowerCase() : "";
+  if (!/^0x[0-9a-f]{64}$/.test(hash)) throw new Error("A valid transaction hash is required.");
+  if (verification.execution?.transactionHash === hash) return json(task);
+  if (verification.execution) throw new Error("A different verified transaction is already attached to this deliverable check.");
+  const [transaction, receipt] = await Promise.all([
+    monadRpc("eth_getTransactionByHash", [hash]) as Promise<Record<string, string> | null>,
+    monadRpc("eth_getTransactionReceipt", [hash]) as Promise<Record<string, string> | null>,
+  ]);
+  if (!transaction || !receipt?.blockNumber) throw new Error("Escrow transaction has not been mined yet.");
+  if (receipt.status !== "0x1") throw new Error("Monad receipt reports a reverted escrow transaction.");
+  if (transaction.from?.toLowerCase() !== ownerId || transaction.to?.toLowerCase() !== verification.escrowAddress || transaction.input?.toLowerCase() !== verification.actionCalldata.toLowerCase() || BigInt(transaction.value ?? "0x0") !== BigInt(0)) {
+    throw new Error("Mined escrow transaction does not match the verified wallet, contract, action calldata, or zero-value policy.");
+  }
+  verification.execution = { transactionHash: hash, blockNumber: Number(BigInt(receipt.blockNumber)), confirmedAtMs: Date.now() };
+  task.status.summary = `Flow verified the ${verification.recommendedAction} transaction for the screened escrow deliverable.`;
+  task.updated_at_ms = Date.now();
+  task.events.push(taskEvent(task.events, "escrow_action_confirmed", task.status.summary));
+  await updateTask(task);
+  return json(task);
+}
+
 async function minedTransaction(hash: string): Promise<{ transaction: Record<string, string>; receipt: Record<string, string> }> {
   const [transaction, receipt] = await Promise.all([
     monadRpc("eth_getTransactionByHash", [hash]) as Promise<Record<string, string> | null>,
@@ -412,6 +440,7 @@ async function route(request: Request, context: Context): Promise<Response> {
   if (segments[0] === "tasks" && segments[2] === "flow-actions" && method === "POST") return flowAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-submission" && method === "POST") return recordFlowSubmission(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "flow-transaction" && method === "POST") return confirmFlow(ownerId, segments[1], request);
+  if (segments[0] === "tasks" && segments[2] === "escrow-verification" && method === "POST") return confirmEscrowVerification(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "operator-actions" && method === "POST") return operatorAction(ownerId, segments[1], request);
   if (segments[0] === "tasks" && segments[2] === "feedback" && method === "POST") {
     const task = await ownedTask(ownerId, segments[1]);

@@ -1,9 +1,11 @@
+import { encodeFunctionData, getAddress } from "viem";
+
+import { MONAD_TESTNET } from "@/lib/chain-config";
+
 export type WalletProvider = {
   request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
   disconnect?: () => Promise<void>;
 };
-
-import { MONAD_TESTNET } from "@/lib/chain-config";
 
 type WalletConnectProvider = WalletProvider & {
   connect(): Promise<void>;
@@ -29,6 +31,15 @@ export class WalletConnectionCancelledError extends Error {
     super(message);
     this.name = "WalletConnectionCancelledError";
   }
+}
+
+export function walletConnectionMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/missing or invalid request\(\) chainid|eip155:10143|unsupported chain|unsupported network|chain.?id/i.test(message)) {
+    return "This wallet did not authorize Monad Testnet. Reconnect and approve Monad Testnet (chain 10143), or use MetaMask if this wallet does not support Monad Testnet.";
+  }
+  if (/user rejected|user denied|request rejected|rejected by user/i.test(message)) return "Wallet approval was declined. Nothing was signed or sent.";
+  return message;
 }
 
 export async function connectWalletConnectProvider(provider: WalletConnectProvider): Promise<void> {
@@ -122,8 +133,8 @@ export async function connectWalletProvider(): Promise<WalletProvider> {
     const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
     const provider = await EthereumProvider.init({
       projectId,
-      chains: [1],
-      optionalChains: [10143],
+      chains: [MONAD_TESTNET.chainId],
+      optionalChains: [1],
       showQrModal: true,
       rpcMap: { 1: "https://cloudflare-eth.com", 10143: MONAD_TESTNET.rpcUrl },
       metadata: {
@@ -158,4 +169,3 @@ export async function disconnectWalletProvider(): Promise<void> {
   activeProvider = null;
   await provider?.disconnect?.();
 }
-import { encodeFunctionData, getAddress } from "viem";

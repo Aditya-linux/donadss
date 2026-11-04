@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WalletConnectionCancelledError } from "@/lib/wallet-provider";
 import type { Task } from "@/lib/donads-api";
-import { ChatShell, DeleteHistoryDialog } from "./chat-shell";
+import { ChatShell, DeleteHistoryDialog, taskAddressSuggestions } from "./chat-shell";
 
 const walletMocks = vi.hoisted(() => ({ connect: vi.fn() }));
 
@@ -36,6 +36,14 @@ describe("ChatShell", () => {
     expect(screen.getByLabelText("Ask DONADS to complete a task").closest("form")).toHaveClass("donads-workspace-width");
   });
 
+  it("uses mission-focused demo starters that populate the composer", async () => {
+    const user = userEvent.setup();
+    render(<ChatShell />);
+    await user.click(screen.getByText("Verify an escrow deliverable"));
+    expect(screen.getByLabelText("Ask DONADS to complete a task")).toHaveValue("Verify escrow 0xESCROW with deliverable https://docs.monad.xyz");
+    expect(screen.getByText("Scout → Sentinel → Flow")).toBeInTheDocument();
+  });
+
   it("requires wallet identity before dispatching a real task", async () => {
     const user = userEvent.setup();
     render(<ChatShell />);
@@ -66,6 +74,17 @@ describe("ChatShell", () => {
     expect(screen.queryByText("Opening the wallet chooser…")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
+  });
+});
+
+describe("task address suggestions", () => {
+  it("deduplicates wallet and history addresses into contextual quick inserts", () => {
+    const wallet = "0x1111111111111111111111111111111111111111";
+    const tasks = [{ prompt: "Release escrow 0x2222222222222222222222222222222222222222", input: {}, status: { state: "failed", error: "test", latency_ms: 1 } }] as Task[];
+    expect(taskAddressSuggestions(tasks, wallet)).toEqual([
+      { label: "Connected wallet", address: wallet },
+      { label: "Active escrow", address: "0x2222222222222222222222222222222222222222" },
+    ]);
   });
 });
 

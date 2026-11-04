@@ -13,6 +13,9 @@ export type ScoutSource = {
   url: string;
   status: "fetched" | "failed";
   error: string | null;
+  contentHash?: string | null;
+  retrievedAt?: string | null;
+  securityScreen?: { passed: boolean; signals: string[]; contentHash: string | null };
 };
 
 export type AiAttachmentInput = { name: string; mime_type: string; data: string };
@@ -22,6 +25,28 @@ export type ScoutReport = {
   findings: ScoutFinding[];
   sources: ScoutSource[];
   limitations: string;
+};
+
+export type DeliverableVerification = {
+  escrowAddress: string;
+  deliverableUrl: string;
+  contentHash: string | null;
+  retrievedAt: string;
+  sentinelVerdict: { verdict: "CLEAN" | "BLOCKED"; threatScore: number; signals: string[] };
+  extractedSummary: string;
+  onchain: {
+    contractCodeHash: string;
+    state: number;
+    termsHash: string;
+    buyer: string;
+    seller: string;
+    fundedAmountAtomic: string;
+  } | null;
+  recommendedAction: "release" | "dispute" | "none";
+  actionCalldata: `0x${string}` | null;
+  evidence: string;
+  blockedReason: string | null;
+  execution?: { transactionHash: string; blockNumber: number; confirmedAtMs: number } | null;
 };
 
 export type BrandProfile = {
@@ -258,6 +283,8 @@ export type ScoutCompletedTask = TaskBase & {
       report: ScoutReport;
       agent_version: string;
       read_only: boolean;
+      securityScreen?: { passed: boolean; signals: string[]; contentHash: string | null };
+      deliverableVerification?: DeliverableVerification;
     };
     latency_ms: number;
   };
@@ -516,13 +543,14 @@ export async function createScoutTask(
   prompt: string,
   signal?: AbortSignal,
   attachments: AiAttachmentInput[] = [],
+  options?: { escrowAddress?: string },
 ): Promise<Task> {
   let sources: string[] = [];
   try { sources = extractSourceUrls(prompt); } catch (error) { if (!attachments.length) throw error; }
   const response = await apiFetch(`${API_URL}/v1/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, bot: "scout", input: { sources, attachments } }),
+    body: JSON.stringify({ prompt, bot: "scout", input: { sources, attachments, ...(options?.escrowAddress ? { escrow_address: options.escrowAddress } : {}) } }),
     signal,
   });
   return readJson<Task>(response);
@@ -691,6 +719,20 @@ export async function confirmFlowTransaction(
     signal,
   });
   return readJson<FlowCompletedTask>(response);
+}
+
+export async function confirmEscrowVerification(
+  taskId: string,
+  transactionHash: string,
+  signal?: AbortSignal,
+): Promise<ScoutCompletedTask> {
+  const response = await apiFetch(`${API_URL}/v1/tasks/${taskId}/escrow-verification`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transaction_hash: transactionHash }),
+    signal,
+  });
+  return readJson<ScoutCompletedTask>(response);
 }
 
 export async function recordFlowSubmission(

@@ -116,6 +116,16 @@ npm audit
 
 Unit-test doubles exist only inside tests. They validate failures and UI behavior and never create product-visible payment or order claims.
 
+### Real local acceptance flow
+
+With the dispatcher running, execute:
+
+```powershell
+cargo run -p donads-dispatch --example acceptance
+```
+
+This generates an unfunded ephemeral wallet in memory, signs into the real API, completes a Sentinel bytecode task, verifies wallet-scoped history, logs out, and confirms the revoked session receives `401`. The key is never printed or persisted, and the flow never signs a transaction.
+
 ## Path to the first real product order
 
 1. Deploy and audit the policy vault on Monad Testnet using a funded test wallet; never share its private key.

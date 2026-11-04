@@ -18,13 +18,16 @@ import { useState } from "react";
 import { GrowthWorkspace } from "@/components/growth-workspace";
 import { CommerceWorkspace } from "@/components/commerce-workspace";
 import { FlowWorkspace } from "@/components/flow-workspace";
-import { MascotMark } from "@/components/mascot";
+import { MascotLoader, MascotMark } from "@/components/mascot";
 import { OperatorWorkspace } from "@/components/operator-workspace";
 import { ScoutWorkspace } from "@/components/scout-workspace";
 import { SentinelWorkspace } from "@/components/sentinel-workspace";
 import {
   createAuthChallenge,
+  listTaskHistory,
+  revokeWalletSession,
   setAccessToken,
+  type Task,
   verifyWalletSignature,
 } from "@/lib/donads-api";
 
@@ -76,12 +79,16 @@ function Sidebar({
   onClose,
   onAgentChange,
   onNewTask,
+  history,
+  historyReady,
 }: {
   open: boolean;
   agent: Agent;
   onClose: () => void;
   onAgentChange: (agent: Agent) => void;
   onNewTask: () => void;
+  history: Task[];
+  historyReady: boolean;
 }) {
   return (
     <>
@@ -103,6 +110,19 @@ function Sidebar({
           <SpecialistButton active={agent === "operator"} icon={<Workflow className="size-4" aria-hidden="true" />} name="Operator" specialty="Task orchestration" onClick={() => onAgentChange("operator")} />
           <SpecialistButton active={agent === "sentinel"} icon={<ShieldCheck className="size-4" aria-hidden="true" />} name="Sentinel" specialty="Bytecode triage" onClick={() => onAgentChange("sentinel")} />
         </nav>
+        {historyReady ? (
+          <section className="mt-6 min-h-0" aria-label="Recent task history">
+            <p className="px-3 pb-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Recent tasks</p>
+            {history.length ? <ol className="max-h-40 space-y-1 overflow-y-auto">
+                {history.map((task) => (
+                  <li key={task.id} className="rounded-lg px-3 py-2 text-xs">
+                    <p className="truncate font-medium">{task.prompt}</p>
+                    <p className="mt-0.5 capitalize text-muted-foreground">{task.bot} · {task.status.state}</p>
+                  </li>
+                ))}
+              </ol> : <p className="px-3 py-2 text-xs leading-5 text-muted-foreground">No tasks yet. Start with New task.</p>}
+          </section>
+        ) : null}
         <div className="mt-auto rounded-xl bg-muted p-3">
           <div className="flex items-center gap-2 text-xs font-medium"><Sparkles className="size-4" aria-hidden="true" />2 agents awaiting approval</div>
           <p className="mt-1.5 text-xs leading-5 text-muted-foreground">Operator coordinates approved specialists without gaining their permissions.</p>
@@ -119,6 +139,8 @@ export function ChatShell() {
   const [signedInWallet, setSignedInWallet] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+  const [history, setHistory] = useState<Task[]>([]);
+  const [historyReady, setHistoryReady] = useState(false);
   const details = agentDetails[agent];
   const AgentIcon = details.icon;
 
@@ -147,25 +169,47 @@ export function ChatShell() {
       const session = await verifyWalletSignature(address, signature);
       setAccessToken(session.access_token);
       setSignedInWallet(session.owner_id);
+      setHistory(await listTaskHistory(20));
+      setHistoryReady(true);
     } catch (error) {
       setAccessToken(null);
+      setSignedInWallet(null);
+      setHistory([]);
+      setHistoryReady(false);
       setAuthError(error instanceof Error ? error.message : "Wallet sign-in failed.");
     } finally {
       setSigningIn(false);
     }
   }
 
+  async function signOut() {
+    setSigningIn(true);
+    setAuthError(null);
+    try {
+      await revokeWalletSession();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Server logout failed; the local session was cleared.");
+    } finally {
+      setAccessToken(null);
+      setSignedInWallet(null);
+      setHistory([]);
+      setHistoryReady(false);
+      setSigningIn(false);
+    }
+  }
+
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
-      <Sidebar open={sidebarOpen} agent={agent} onClose={() => setSidebarOpen(false)} onAgentChange={selectAgent} onNewTask={() => { setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} />
+      {signingIn ? <MascotLoader label={signedInWallet ? "Closing your wallet session…" : "Verifying your wallet session…"} /> : null}
+      <Sidebar open={sidebarOpen} agent={agent} history={history} historyReady={historyReady} onClose={() => setSidebarOpen(false)} onAgentChange={selectAgent} onNewTask={() => { setWorkspaceKey((value) => value + 1); setSidebarOpen(false); }} />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center border-b border-border px-3 sm:px-5">
           <button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)} className="mr-2 grid size-10 place-items-center rounded-lg hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring lg:hidden"><Menu className="size-5" aria-hidden="true" /></button>
           <div className="flex min-h-10 items-center gap-2 px-2"><AgentIcon className="size-4" aria-hidden="true" /><span className="text-sm font-semibold">{details.name}</span></div>
           <div className="ml-auto flex items-center gap-2">
-            <button type="button" onClick={signIn} disabled={signingIn} className="flex min-h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-muted disabled:opacity-60">
+            <button type="button" aria-label={signedInWallet ? "Sign out wallet session" : "Sign in with wallet"} onClick={() => { void (signedInWallet ? signOut() : signIn()); }} disabled={signingIn} className="flex min-h-10 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60">
               <WalletCards className="size-3.5" aria-hidden="true" />
-              {signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : signingIn ? "Signing in…" : "Sign in"}
+              {signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)} · Sign out` : signingIn ? "Signing in…" : "Sign in"}
             </button>
             <div className="hidden items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground sm:flex"><span className="size-1.5 rounded-full bg-primary" />{details.badge}</div>
           </div>

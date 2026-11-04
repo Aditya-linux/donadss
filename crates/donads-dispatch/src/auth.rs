@@ -16,19 +16,26 @@ use uuid::Uuid;
 
 const CHALLENGE_LIFETIME: Duration = Duration::minutes(5);
 const SESSION_LIFETIME: Duration = Duration::hours(12);
+const RATE_WINDOW: Duration = Duration::minutes(1);
+const MAX_CHALLENGES_PER_WALLET_PER_MINUTE: u32 = 5;
+const MAX_PENDING_CHALLENGES: usize = 10_000;
+const MAX_ACTIVE_SESSIONS: usize = 100_000;
 
 #[derive(Clone, Debug)]
 pub struct AuthPrincipal {
     pub owner_id: String,
+    pub session_token: String,
 }
 
 #[derive(Clone)]
 pub struct AuthService {
     challenges: Arc<RwLock<HashMap<String, PendingChallenge>>>,
+    challenge_attempts: Arc<RwLock<HashMap<String, RateWindow>>>,
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     domain: Arc<str>,
     uri: Arc<str>,
     chain_id: u64,
+    session_requests_per_minute: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +48,13 @@ struct PendingChallenge {
 struct Session {
     owner_id: String,
     expires_at: OffsetDateTime,
+    rate_window: RateWindow,
+}
+
+#[derive(Clone, Debug)]
+struct RateWindow {
+    started_at: OffsetDateTime,
+    requests: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +111,13 @@ impl AuthError {
             message,
         }
     }
+
+    fn too_many_requests(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message,
+        }
+    }
 }
 
 impl IntoResponse for AuthError {
@@ -110,7 +131,12 @@ impl IntoResponse for AuthError {
 }
 
 impl AuthService {
-    pub fn new(domain: String, uri: String, chain_id: u64) -> Result<Self, AuthError> {
+    pub fn new(
+        domain: String,
+        uri: String,
+        chain_id: u64,
+        session_requests_per_minute: u32,
+    ) -> Result<Self, AuthError> {
         if domain.trim().is_empty() || domain.contains(['\n', '\r']) {
             return Err(AuthError::bad_request("authentication domain is invalid"));
         }
@@ -121,18 +147,44 @@ impl AuthService {
                 "authentication URI must use HTTP(S)",
             ));
         }
+        if session_requests_per_minute == 0 {
+            return Err(AuthError::bad_request(
+                "session rate limit must be greater than zero",
+            ));
+        }
         Ok(Self {
             challenges: Arc::new(RwLock::new(HashMap::new())),
+            challenge_attempts: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             domain: domain.into(),
             uri: uri.into(),
             chain_id,
+            session_requests_per_minute,
         })
     }
 
     pub async fn create_challenge(&self, raw_address: &str) -> Result<ChallengeOutput, AuthError> {
         let address = normalize_address(raw_address)?;
         let now = OffsetDateTime::now_utc();
+        let mut challenge_attempts = self.challenge_attempts.write().await;
+        if challenge_attempts.len() >= MAX_PENDING_CHALLENGES {
+            challenge_attempts.retain(|_, window| now - window.started_at < RATE_WINDOW);
+        }
+        if challenge_attempts.len() >= MAX_PENDING_CHALLENGES
+            && !challenge_attempts.contains_key(&address)
+        {
+            return Err(AuthError::too_many_requests(
+                "sign-in challenge capacity reached; retry in one minute",
+            ));
+        }
+        enforce_rate_limit(
+            &mut challenge_attempts,
+            &address,
+            now,
+            MAX_CHALLENGES_PER_WALLET_PER_MINUTE,
+            "too many sign-in challenges for this wallet",
+        )?;
+        drop(challenge_attempts);
         let expires_at = now + CHALLENGE_LIFETIME;
         let nonce = Uuid::new_v4().simple().to_string();
         let issued = now
@@ -145,7 +197,16 @@ impl AuthService {
             "{} wants you to sign in with your Ethereum account:\n{}\n\nSign in to DONADS. This request does not authorize a transaction.\n\nURI: {}\nVersion: 1\nChain ID: {}\nNonce: {}\nIssued At: {}\nExpiration Time: {}",
             self.domain, address, self.uri, self.chain_id, nonce, issued, expires
         );
-        self.challenges.write().await.insert(
+        let mut challenges = self.challenges.write().await;
+        if challenges.len() >= MAX_PENDING_CHALLENGES {
+            challenges.retain(|_, challenge| challenge.expires_at > now);
+        }
+        if challenges.len() >= MAX_PENDING_CHALLENGES && !challenges.contains_key(&address) {
+            return Err(AuthError::too_many_requests(
+                "sign-in challenge capacity reached; retry shortly",
+            ));
+        }
+        challenges.insert(
             address.clone(),
             PendingChallenge {
                 message: message.clone(),
@@ -179,11 +240,23 @@ impl AuthService {
 
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let expires_at = OffsetDateTime::now_utc() + SESSION_LIFETIME;
-        self.sessions.write().await.insert(
+        let mut sessions = self.sessions.write().await;
+        sessions.retain(|_, session| session.expires_at > OffsetDateTime::now_utc());
+        sessions.retain(|_, session| session.owner_id != address);
+        if sessions.len() >= MAX_ACTIVE_SESSIONS {
+            return Err(AuthError::too_many_requests(
+                "session capacity reached; retry shortly",
+            ));
+        }
+        sessions.insert(
             token.clone(),
             Session {
                 owner_id: address.clone(),
                 expires_at,
+                rate_window: RateWindow {
+                    started_at: OffsetDateTime::now_utc(),
+                    requests: 0,
+                },
             },
         );
         Ok(SessionOutput {
@@ -198,21 +271,59 @@ impl AuthService {
 
     async fn authenticate(&self, token: &str) -> Result<AuthPrincipal, AuthError> {
         let now = OffsetDateTime::now_utc();
-        let session = self
-            .sessions
-            .read()
-            .await
-            .get(token)
-            .cloned()
+        let mut sessions = self.sessions.write().await;
+        let session = sessions
+            .get_mut(token)
             .ok_or_else(|| AuthError::unauthorized("session is invalid"))?;
         if session.expires_at <= now {
-            self.sessions.write().await.remove(token);
+            sessions.remove(token);
             return Err(AuthError::unauthorized("session has expired"));
         }
+        if now - session.rate_window.started_at >= RATE_WINDOW {
+            session.rate_window = RateWindow {
+                started_at: now,
+                requests: 0,
+            };
+        }
+        if session.rate_window.requests >= self.session_requests_per_minute {
+            return Err(AuthError::too_many_requests(
+                "session request limit exceeded; retry in one minute",
+            ));
+        }
+        session.rate_window.requests += 1;
         Ok(AuthPrincipal {
-            owner_id: session.owner_id,
+            owner_id: session.owner_id.clone(),
+            session_token: token.to_owned(),
         })
     }
+
+    pub async fn revoke(&self, token: &str) {
+        self.sessions.write().await.remove(token);
+    }
+}
+
+fn enforce_rate_limit(
+    windows: &mut HashMap<String, RateWindow>,
+    key: &str,
+    now: OffsetDateTime,
+    limit: u32,
+    message: &'static str,
+) -> Result<(), AuthError> {
+    let window = windows.entry(key.to_owned()).or_insert(RateWindow {
+        started_at: now,
+        requests: 0,
+    });
+    if now - window.started_at >= RATE_WINDOW {
+        *window = RateWindow {
+            started_at: now,
+            requests: 0,
+        };
+    }
+    if window.requests >= limit {
+        return Err(AuthError::too_many_requests(message));
+    }
+    window.requests += 1;
+    Ok(())
 }
 
 pub async fn require_auth(
@@ -279,8 +390,9 @@ fn recover_address(message: &str, raw_signature: &str) -> Result<String, AuthErr
 mod tests {
     use k256::ecdsa::SigningKey;
     use sha3::{Digest, Keccak256};
+    use time::{Duration, OffsetDateTime};
 
-    use super::{AuthService, VerifyInput};
+    use super::{AuthService, RateWindow, Session, VerifyInput};
 
     #[tokio::test]
     async fn challenge_is_chain_bound_short_lived_and_replaced_per_address() {
@@ -288,6 +400,7 @@ mod tests {
             "localhost:3000".into(),
             "http://localhost:3000".into(),
             10_143,
+            120,
         )
         .expect("auth config");
         let first = auth
@@ -313,6 +426,7 @@ mod tests {
             "localhost:3000".into(),
             "http://localhost:3000".into(),
             10_143,
+            120,
         )
         .expect("auth config");
         let challenge = auth.create_challenge(&address).await.expect("challenge");
@@ -344,5 +458,39 @@ mod tests {
             .is_err(),
             "a challenge must be single use"
         );
+    }
+
+    #[tokio::test]
+    async fn challenge_and_session_limits_fail_closed() {
+        let address = "0x1111111111111111111111111111111111111111";
+        let auth = AuthService::new(
+            "localhost:3000".into(),
+            "http://localhost:3000".into(),
+            10_143,
+            2,
+        )
+        .expect("auth config");
+        for _ in 0..5 {
+            auth.create_challenge(address).await.expect("within limit");
+        }
+        assert!(auth.create_challenge(address).await.is_err());
+
+        let now = OffsetDateTime::now_utc();
+        auth.sessions.write().await.insert(
+            "a".repeat(64),
+            Session {
+                owner_id: address.into(),
+                expires_at: now + Duration::hours(1),
+                rate_window: RateWindow {
+                    started_at: now,
+                    requests: 0,
+                },
+            },
+        );
+        assert!(auth.authenticate(&"a".repeat(64)).await.is_ok());
+        assert!(auth.authenticate(&"a".repeat(64)).await.is_ok());
+        assert!(auth.authenticate(&"a".repeat(64)).await.is_err());
+        auth.revoke(&"a".repeat(64)).await;
+        assert!(auth.authenticate(&"a".repeat(64)).await.is_err());
     }
 }

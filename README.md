@@ -43,12 +43,22 @@ A Monad transfer is complete only when the configured RPC proves it is on the ex
 
 A commerce task is complete only when an authorized merchant integration returns a real invoice, the exact on-chain payment is confirmed, and the merchant returns a verifiable order ID/receipt. Until the first merchant connector is configured, Commerce truthfully stops at a verified purchase intent and approval boundary.
 
+## Wallet and payment model
+
+DONADS agents do **not** currently own wallets, private keys, or independent funds. Wallet sign-in proves task ownership but cannot move money. For a payment, Flow creates an exact intent containing the Monad network, payer, recipient, asset, and amount. Sentinel validates that intent, the browser wallet shows the final transaction for explicit user approval, and the wallet signs and broadcasts it. DONADS then reads the transaction from Monad RPC and records completion only after the receipt and exact values match.
+
+Operator can coordinate Flow or Commerce, but it cannot sign on their behalf. Its permission model explicitly disables signing and fund movement. The policy-vault contract is the future bounded-autonomy path: a user may fund a smart-contract vault and delegate a revocable session address with recipient, per-transaction, daily, expiry, and replay limits. That vault must be deployed, audited, funded, and approved on testnet before any agent-like automated payment is enabled.
+
+Commerce adds merchant evidence around the payment: verified offer → exact user approval → merchant invoice → wallet payment → Monad receipt → merchant order receipt. Without both the chain receipt and merchant order receipt, the product remains unordered.
+
 ## Security and multi-user model
 
 - Wallet sign-in uses an EIP-4361-shaped, Monad-chain-bound challenge and EIP-191 signature recovery.
 - Challenges expire after five minutes and are single-use; sessions expire after twelve hours.
 - Session tokens remain in browser memory and are stored server-side, not in local storage.
 - Tasks, events, feedback, profiles, routines, payment actions, and orchestration actions are isolated by normalized wallet address.
+- Wallet-scoped task history is available through `GET /v1/tasks` and appears in the recent-task sidebar.
+- Sign-in challenges and authenticated sessions are rate limited; API responses include restrictive security headers.
 - Operator child tasks inherit the parent owner; cross-wallet identifiers return `404` without revealing existence.
 - CORS accepts only configured frontend origins. Monad chain ID is revalidated inside the transaction-confirmation path.
 
@@ -63,6 +73,8 @@ The current in-memory session registry and JSON task stores are appropriate for 
 - `contracts/`: policy-vault contract and Solidity tests.
 
 Operator executes dependency waves in parallel. Saved routines create a fresh reviewable run; they never reuse a signature or silently repeat a purchase.
+
+Every asynchronous workflow uses the DONADS canvas loader from the approved process design. Its status text changes with the real operation, animation stops when the operation ends, and reduced-motion users receive a stable idle pose.
 
 ## Local setup
 
@@ -111,7 +123,7 @@ Unit-test doubles exist only inside tests. They validate failures and UI behavio
 3. Integrate one authorized merchant that sells physical products and directly accepts supported crypto through a documented checkout API.
 4. Bind merchant invoice, wallet payment, fulfillment, order receipt, refund, and support status into one idempotent workflow.
 5. Replace JSON/in-memory infrastructure with PostgreSQL, Redis or an equivalent encrypted session store, and a durable job queue.
-6. Add rate limits, security headers, CI, monitoring, backups, browser isolation, and encrypted connector credentials.
+6. Add distributed edge quotas, monitoring, backups, browser isolation, and encrypted connector credentials.
 7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
 8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
 

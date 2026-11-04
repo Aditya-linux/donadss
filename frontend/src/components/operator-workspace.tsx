@@ -368,7 +368,7 @@ export function OperatorWorkspace() {
     return (
       <>
         {error ? <div role="alert" className="mx-auto mt-4 flex w-[calc(100%-2rem)] max-w-4xl items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm"><span>{error}</span><button type="button" onClick={() => setError(null)} className="min-h-10 rounded-lg px-3 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">Dismiss</button></div> : null}
-        {working && progress ? <div className="mx-auto mt-3 w-[calc(100%-2rem)] max-w-4xl"><MascotLoader label={progress} compact /></div> : null}
+        {working && progress ? <div className="mx-auto mt-3 w-[calc(100%-2rem)] max-w-4xl"><MascotLoader label={progress} /></div> : null}
         <PlanView task={task} working={working} onStart={() => void run("start")} onCancel={() => void cancel()} onRetry={() => void run("retry_failed")} onSaveRoutine={() => void saveRoutine()} routineSaved={routineSaved} />
       </>
     );

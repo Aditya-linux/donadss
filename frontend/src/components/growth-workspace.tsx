@@ -291,7 +291,7 @@ export function GrowthWorkspace() {
             <div className="flex items-center justify-center py-8 text-center text-sm text-muted-foreground"><CalendarDays className="mr-2 size-4" aria-hidden="true" /> Complete the brief, then describe the campaign objective below.</div>
           )}
           {working ? (
-            <div className="mt-4"><MascotLoader label={progress} compact /></div>
+            <div className="mt-4"><MascotLoader label={progress} /></div>
           ) : null}
         </div>
         <div className="fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-10 lg:left-72">

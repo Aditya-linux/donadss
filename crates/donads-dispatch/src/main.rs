@@ -5,13 +5,14 @@ use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc, 
 use anyhow::{Context, anyhow};
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    body::Body,
+    extract::{Path, Query, State},
     http::{
-        HeaderValue, Method, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderValue, Method, Request, StatusCode,
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
     },
-    middleware,
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bot_commerce::{
@@ -306,6 +307,20 @@ impl PersistentTaskStore {
 
     async fn get(&self, id: Uuid) -> Option<Task> {
         self.tasks.read().await.get(&id).cloned()
+    }
+
+    async fn list(&self, owner_id: &str, limit: usize) -> Vec<Task> {
+        let mut tasks: Vec<_> = self
+            .tasks
+            .read()
+            .await
+            .values()
+            .filter(|task| task.owner_id == owner_id)
+            .cloned()
+            .collect();
+        tasks.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        tasks.truncate(limit);
+        tasks
     }
 
     async fn transition(
@@ -733,6 +748,11 @@ struct FeedbackInput {
 }
 
 #[derive(Deserialize)]
+struct TaskHistoryQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
 struct RoutineCaptureInput {
     id: String,
     name: String,
@@ -898,6 +918,10 @@ async fn main() -> anyhow::Result<()> {
         env::var("DONADS_AUTH_DOMAIN").unwrap_or_else(|_| "localhost:3000".into()),
         env::var("DONADS_AUTH_URI").unwrap_or_else(|_| "http://localhost:3000".into()),
         network.chain_id(),
+        env::var("DONADS_SESSION_REQUESTS_PER_MINUTE")
+            .unwrap_or_else(|_| "120".into())
+            .parse()
+            .context("DONADS_SESSION_REQUESTS_PER_MINUTE must be a positive integer")?,
     )
     .map_err(|error| anyhow!(error.to_string()))?;
 
@@ -933,7 +957,8 @@ async fn main() -> anyhow::Result<()> {
         auth: auth.clone(),
     };
     let protected = Router::new()
-        .route("/v1/tasks", post(create_task))
+        .route("/v1/tasks", get(list_tasks).post(create_task))
+        .route("/v1/auth/logout", post(auth_logout))
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/events", get(get_task_events))
         .route("/v1/tasks/{id}/feedback", post(record_feedback))
@@ -960,6 +985,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/auth/verify", post(auth_verify))
         .merge(protected)
         .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(security_headers))
         .layer(cors_layer()?)
         .with_state(state);
 
@@ -1025,6 +1051,14 @@ async fn auth_verify(
     state.auth.verify(input).await.map(Json)
 }
 
+async fn auth_logout(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+) -> StatusCode {
+    state.auth.revoke(&principal.session_token).await;
+    StatusCode::NO_CONTENT
+}
+
 fn cors_layer() -> anyhow::Result<CorsLayer> {
     let configured = env::var("DONADS_ALLOWED_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".into());
@@ -1049,12 +1083,46 @@ fn cors_layer() -> anyhow::Result<CorsLayer> {
         .allow_headers([AUTHORIZATION, CONTENT_TYPE]))
 }
 
+async fn security_headers(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    response
+}
+
 async fn create_task(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Json(input): Json<TaskInput>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     enqueue_task(state, input, principal.owner_id).await
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Query(query): Query<TaskHistoryQuery>,
+) -> Json<Vec<Task>> {
+    Json(
+        state
+            .tasks
+            .list(&principal.owner_id, query.limit.unwrap_or(50).clamp(1, 100))
+            .await,
+    )
 }
 
 async fn enqueue_task(
@@ -2092,6 +2160,33 @@ mod tests {
         assert!(matches!(recovered.status, TaskStatus::Completed { .. }));
         assert_eq!(recovered.events.len(), 2);
         assert_eq!(recovered.feedback.map(|feedback| feedback.rating), Some(5));
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn task_history_is_scoped_to_the_authenticated_owner() {
+        let path = temporary_store_path();
+        let store = PersistentTaskStore::load(path.clone())
+            .await
+            .expect("store should load");
+        for (owner, prompt) in [("owner-a", "first"), ("owner-b", "private")] {
+            store
+                .insert(Task::queued_for(
+                    TaskInput {
+                        prompt: prompt.into(),
+                        bot: Some("scout".into()),
+                        input: json!({"sources": ["https://example.com"]}),
+                    },
+                    "scout".into(),
+                    owner.into(),
+                ))
+                .await
+                .expect("task should persist");
+        }
+        let owner_a = store.list("owner-a", 50).await;
+        assert_eq!(owner_a.len(), 1);
+        assert_eq!(owner_a[0].prompt, "first");
+        assert!(store.list("unknown", 50).await.is_empty());
         let _ = tokio::fs::remove_file(path).await;
     }
 

@@ -3,6 +3,7 @@
 import { ShieldCheck, ShoppingBag } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { applyCommerceAction, CommerceCompletedTask, createCommerceTask, waitForTask } from "@/lib/donads-api";
+import { MascotLoader } from "@/components/mascot";
 
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -38,6 +39,7 @@ export function CommerceWorkspace() {
 
   const workflow = task?.status.data.workflow;
   return <main className="flex-1 overflow-y-auto p-4 sm:p-8">
+    {working ? <MascotLoader label={workflow ? "Recording your commerce decision…" : "Checking the crypto offer…"} /> : null}
     <div className="mx-auto max-w-2xl space-y-6">
       <header><div className="flex items-center gap-3"><ShoppingBag className="size-7"/><h1 className="text-3xl font-semibold tracking-tight">Crypto commerce intent</h1></div><p className="mt-2 text-sm text-muted-foreground">Select and authorize only merchants that explicitly accept crypto. DONADS does not claim an order until a real Monad transaction and merchant receipt are verified.</p></header>
       {!workflow ? <form onSubmit={submit} className="space-y-4 rounded-2xl border border-border bg-card p-5">

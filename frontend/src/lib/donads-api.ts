@@ -375,6 +375,14 @@ export async function verifyWalletSignature(
   return readJson(response);
 }
 
+export async function revokeWalletSession(): Promise<void> {
+  const response = await apiFetch(`${API_URL}/v1/auth/logout`, { method: "POST" });
+  if (!response.ok && response.status !== 401) {
+    await readJson(response);
+  }
+  setAccessToken(null);
+}
+
 export class ApiError extends Error {
   constructor(message: string) {
     super(message);
@@ -723,6 +731,17 @@ export async function waitForOperator(
 export async function getTask(id: string, signal?: AbortSignal): Promise<Task> {
   const response = await apiFetch(`${API_URL}/v1/tasks/${id}`, { signal });
   return readJson<Task>(response);
+}
+
+export async function listTaskHistory(
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<Task[]> {
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+  const response = await apiFetch(`${API_URL}/v1/tasks?limit=${safeLimit}`, {
+    signal,
+  });
+  return readJson<Task[]>(response);
 }
 
 export async function submitTaskFeedback(

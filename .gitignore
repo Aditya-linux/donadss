@@ -26,3 +26,4 @@
 # Superseded local planning and phase-review artifacts are kept outside the active repository.
 /docs/
 /plan.txt
+/spin.txt

@@ -192,7 +192,7 @@ export function ScoutWorkspace() {
               </article>
             ))}
             {working ? (
-              <MascotLoader label={progress} compact />
+              <MascotLoader label={progress} />
             ) : null}
           </div>
         )}

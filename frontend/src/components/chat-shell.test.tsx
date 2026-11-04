@@ -75,6 +75,19 @@ describe("ChatShell", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "What should DONADS complete?" })).toBeInTheDocument();
   });
+
+  it("turns an unsupported-chain failure into a dismissible wallet choice", async () => {
+    walletMocks.connect.mockRejectedValueOnce(new Error("Missing or invalid request() chainId: eip155:10143"));
+    const user = userEvent.setup();
+    render(<ChatShell />);
+
+    await user.click(screen.getByRole("button", { name: "Connect wallet" }));
+
+    expect(await screen.findByText(/Choose a Monad-compatible wallet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose another wallet" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss wallet message" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });
 
 describe("task address suggestions", () => {

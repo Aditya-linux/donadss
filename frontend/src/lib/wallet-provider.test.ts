@@ -1,8 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { connectWalletConnectProvider, ensureMonadTestnet, walletConnectionMessage, WalletConnectionCancelledError } from "./wallet-provider";
+import { connectWalletConnectProvider, connectWalletProvider, disconnectWalletProvider, ensureMonadTestnet, walletConnectionMessage, WalletConnectionCancelledError } from "./wallet-provider";
 
 describe("WalletConnect lifecycle", () => {
+  it("prefers an injected wallet on mobile instead of opening a QR handoff", async () => {
+    const injected = { request: vi.fn(async () => []) };
+    Object.defineProperty(window, "ethereum", { configurable: true, value: injected });
+
+    await expect(connectWalletProvider()).resolves.toBe(injected);
+    await disconnectWalletProvider();
+    Reflect.deleteProperty(window, "ethereum");
+  });
+
   it("rejects immediately and cleans up when the QR modal is closed", async () => {
     let onState: ((state: { open?: boolean }) => void) | undefined;
     const unsubscribe = vi.fn();
@@ -81,7 +90,7 @@ describe("WalletConnect lifecycle", () => {
 
 describe("Monad network enforcement", () => {
   it("translates WalletConnect namespace errors into a recoverable Monad message", () => {
-    expect(walletConnectionMessage(new Error("Missing or invalid request() chainId: eip155:10143"))).toMatch(/approve Monad Testnet \(chain 10143\)/i);
+    expect(walletConnectionMessage(new Error("Missing or invalid request() chainId: eip155:10143"))).toMatch(/Monad-compatible wallet.*chain 10143/i);
   });
 
   it("explains when a connected wallet did not approve Monad Testnet", async () => {

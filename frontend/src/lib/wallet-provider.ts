@@ -36,7 +36,7 @@ export class WalletConnectionCancelledError extends Error {
 export function walletConnectionMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/missing or invalid request\(\) chainid|eip155:10143|unsupported chain|unsupported network|chain.?id/i.test(message)) {
-    return "This wallet did not authorize Monad Testnet. Reconnect and approve Monad Testnet (chain 10143), or use MetaMask if this wallet does not support Monad Testnet.";
+    return "This wallet cannot use Monad Testnet yet. Choose a Monad-compatible wallet, or add Monad Testnet (chain 10143) before trying the transaction again.";
   }
   if (/user rejected|user denied|request rejected|rejected by user/i.test(message)) return "Wallet approval was declined. Nothing was signed or sent.";
   return message;
@@ -128,13 +128,25 @@ export async function ensureMonadTestnet(provider: WalletProvider): Promise<void
 export async function connectWalletProvider(): Promise<WalletProvider> {
   if (activeProvider) return activeProvider;
 
+  // Wallet browsers on mobile inject an EIP-1193 provider. Prefer it so the
+  // user signs in on the same device instead of seeing a QR intended for a
+  // desktop-to-phone handoff.
+  if (window.ethereum) {
+    activeProvider = window.ethereum;
+    return activeProvider;
+  }
+
   const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID;
   if (projectId) {
     const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
     const provider = await EthereumProvider.init({
       projectId,
-      chains: [MONAD_TESTNET.chainId],
-      optionalChains: [1],
+      // Authentication is chain-agnostic. Requiring an uncommon testnet here
+      // makes otherwise valid mobile wallets reject the connection before the
+      // user can run a non-financial task. Financial actions call
+      // ensureMonadTestnet immediately before preparing a transaction.
+      chains: [1],
+      optionalChains: [MONAD_TESTNET.chainId],
       showQrModal: true,
       rpcMap: { 1: "https://cloudflare-eth.com", 10143: MONAD_TESTNET.rpcUrl },
       metadata: {
@@ -153,10 +165,6 @@ export async function connectWalletProvider(): Promise<WalletProvider> {
     return activeProvider;
   }
 
-  if (window.ethereum) {
-    activeProvider = window.ethereum;
-    return activeProvider;
-  }
   throw new Error("Wallet connection is not configured. Add a Reown project ID or install an EVM wallet.");
 }
 

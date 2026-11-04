@@ -1,6 +1,3 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
-
 import { decodeFunctionResult, encodeFunctionData, formatEther, getAddress, isAddress, keccak256, stringToHex } from "viem";
 
 import type {
@@ -17,6 +14,7 @@ import { DonadsEscrowAbi, DonadsEscrowDeployedBytecode, DonadsEscrowImmutableRef
 import { scanFetchedContentForInjection } from "@/server/content-security";
 import { generateGeminiJson } from "@/server/gemini";
 import { monadRpc, readErc20Balance, readErc20Metadata, tokenAmountToAtomic } from "@/server/monad";
+import { fetchPublicText } from "@/server/public-web";
 import { assessThreat } from "@/server/threat-intelligence";
 
 type RecordValue = Record<string, unknown>;
@@ -76,46 +74,13 @@ function sentinel(input: unknown, started: number): SentinelCompletedTask["statu
   };
 }
 
-function isPrivateAddress(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized === "::1" || normalized === "::" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")) return true;
-  const parts = address.split(".").map(Number);
-  if (parts.length !== 4) return false;
-  return parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || parts[0] >= 224;
-}
-
-async function validatePublicUrl(value: string): Promise<URL> {
-  const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error("Scout accepts public HTTP(S) URLs without embedded credentials.");
-  if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) throw new Error("Scout blocks private-network sources.");
-  const addresses = isIP(url.hostname) ? [{ address: url.hostname }] : await lookup(url.hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) throw new Error("Scout blocks private or reserved network sources.");
-  return url;
-}
-
 async function fetchPublicSource(source: string): Promise<{ url: string; title: string; body: string }> {
-  let url = await validatePublicUrl(source);
-  const preflight = assessThreat({ text: url.toString(), urls: [url.toString()] });
+  const preflight = assessThreat({ text: source, urls: [source] });
   if (preflight.blocked) throw new Error(`Sentinel blocked this source before retrieval: ${preflight.findings.map((finding) => finding.code).join(", ")}.`);
-  for (let redirect = 0; redirect <= 3; redirect += 1) {
-    const response = await fetch(url, { redirect: "manual", headers: { "user-agent": "DONADS-Scout/1.0" }, signal: AbortSignal.timeout(10_000) });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (!location || redirect === 3) throw new Error("Source redirected too many times.");
-      url = await validatePublicUrl(new URL(location, url).toString());
-      const redirectPreflight = assessThreat({ text: url.toString(), urls: [url.toString()] });
-      if (redirectPreflight.blocked) throw new Error(`Sentinel blocked a redirect target: ${redirectPreflight.findings.map((finding) => finding.code).join(", ")}.`);
-      continue;
-    }
-    if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("text/") && !contentType.includes("json")) throw new Error("Source is not readable text.");
-    const raw = (await response.text()).slice(0, 500_000);
-    const title = raw.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() || url.hostname;
-    const body = raw.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
-    return { url: url.toString(), title, body };
-  }
-  throw new Error("Source could not be fetched.");
+  const fetched = await fetchPublicText(source);
+  const finalPreflight = assessThreat({ text: fetched.url, urls: [fetched.url] });
+  if (finalPreflight.blocked) throw new Error(`Sentinel blocked the final source: ${finalPreflight.findings.map((finding) => finding.code).join(", ")}.`);
+  return fetched;
 }
 
 function matchesDonadsEscrowRuntime(code: string): boolean {

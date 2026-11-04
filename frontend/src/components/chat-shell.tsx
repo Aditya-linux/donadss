@@ -194,6 +194,9 @@ export function ChatShell() {
     setSigningIn(true); setAuthError(null);
     try { const provider = await connectWalletProvider(); const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[]; const address = accounts[0]; if (!address) throw new Error("The wallet did not return an account."); const challenge = await createAuthChallenge(address); const signature = await provider.request({ method: "personal_sign", params: [challenge.message, address] }) as string; const session = await verifyWalletSignature(address, signature); setAccessToken(session.access_token); setSignedInWallet(session.owner_id); await loadWalletData(); }
     catch (error) {
+      // Never leave a rejected WalletConnect session cached. A retry must open
+      // the chooser again so the user can select a compatible wallet.
+      await disconnectWalletProvider().catch(() => undefined);
       setAccessToken(null); setSignedInWallet(null); setBalance(null); setTokenBalances([]); setAiUsage(null); setHistory([]); setHistoryReady(true);
       if (!(error instanceof WalletConnectionCancelledError)) setAuthError(walletConnectionMessage(error));
     }
@@ -252,7 +255,7 @@ export function ChatShell() {
           <button type="button" aria-label={signedInWallet ? "Sign out wallet session" : "Connect wallet"} onClick={() => void (signedInWallet ? signOut() : signIn())} disabled={signingIn} className="grid size-10 shrink-0 place-items-center rounded-full border border-border text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:opacity-60 sm:flex sm:w-auto sm:gap-2 sm:px-3"><WalletCards className="size-4" aria-hidden="true" /><span className={signedInWallet ? "hidden sm:inline" : "donads-wallet-label"}>{signedInWallet ? `${signedInWallet.slice(0, 6)}…${signedInWallet.slice(-4)}` : "Connect wallet"}</span></button>
         </div>
       </header>
-      {authError || approvalError ? <div role="alert" className="flex items-center justify-between gap-3 border-b border-border px-5 py-2 text-xs text-destructive"><span>{authError ?? approvalError}</span>{authError ? <button type="button" onClick={() => void signIn()} className="min-h-10 px-3 font-medium underline focus-visible:ring-2 focus-visible:ring-ring">Try again</button> : <button type="button" onClick={() => setApprovalError(null)} className="min-h-10 px-3 font-medium underline focus-visible:ring-2 focus-visible:ring-ring">Dismiss</button>}</div> : null}
+      {authError || approvalError ? <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-destructive/5 px-3 py-2 text-xs text-destructive sm:px-5"><span className="min-w-0 flex-1 leading-5">{authError ?? approvalError}</span><div className="ml-auto flex shrink-0 items-center gap-1">{authError ? <button type="button" onClick={() => void signIn()} className="min-h-10 rounded-lg px-3 font-medium underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring">Choose another wallet</button> : null}<button type="button" aria-label="Dismiss wallet message" onClick={() => { setAuthError(null); setApprovalError(null); }} className="grid size-10 place-items-center rounded-lg hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"><X className="size-4" aria-hidden="true" /></button></div></div> : null}
       <UnifiedTaskWorkspace key={workspaceKey} signedIn={Boolean(signedInWallet)} walletAddress={signedInWallet} aiConfigured={Boolean(aiUsage?.configured)} initialTask={selectedTask} addressSuggestions={taskAddressSuggestions(history, signedInWallet)} onTaskCompleted={() => void loadWalletData()} />
     </div>
   </div>;

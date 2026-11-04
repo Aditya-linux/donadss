@@ -21,6 +21,20 @@ describe("planUnifiedTask", () => {
       tokenContract: null,
     });
   });
+  it.each(["MON", "mons", "monads", "monts"])("normalizes the native asset alias %s", (asset) => {
+    expect(planUnifiedTask(`Send 5 ${asset} to 0x1406Fe936D971A0dAE9a19DD3354b900B08Fa002`)).toMatchObject({
+      kind: "flow",
+      recipient: "0x1406Fe936D971A0dAE9a19DD3354b900B08Fa002",
+      amount: "5",
+      asset: "MON",
+      tokenContract: null,
+    });
+  });
+  it("accepts recipient-first native transfer wording", () => {
+    expect(planUnifiedTask("0x1406Fe936D971A0dAE9a19DD3354b900B08Fa002 send 10 monads")).toMatchObject({
+      kind: "flow", amount: "10", asset: "MON", recipient: "0x1406Fe936D971A0dAE9a19DD3354b900B08Fa002",
+    });
+  });
   it("creates an exact deterministic ERC-20 transfer plan", () => {
     expect(planUnifiedTask("Send 12.5 USDC token 0x1111111111111111111111111111111111111111 to 0x2222222222222222222222222222222222222222")).toEqual({
       kind: "flow", amount: "12.5", asset: "USDC", tokenContract: "0x1111111111111111111111111111111111111111",

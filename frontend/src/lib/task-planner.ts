@@ -26,8 +26,11 @@ export function planUnifiedTask(rawPrompt: string): UnifiedPlan {
   const bytecode = prompt.match(/0x[0-9a-fA-F]{4,}/)?.[0];
   const recipient = prompt.match(/\b0x[0-9a-fA-F]{40}\b/)?.[0];
   const recipients = [...new Set(prompt.match(/\b0x[0-9a-fA-F]{40}\b/g)?.map((value) => value.toLowerCase()) ?? [])];
-  const amount = prompt.match(/\b(\d+(?:\.\d{1,18})?)\s*MON\b/i)?.[1];
-  const batchAmount = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d{1,18})?)\s*MON\s+(?:to\s+each(?:\s+of)?|each\s+to)\b/i)?.[1];
+  // Normalize common ways users refer to Monad's native asset. The resulting
+  // plan always uses the canonical symbol MON; amount/address validation stays
+  // deterministic and unchanged.
+  const amount = prompt.match(/\b(\d+(?:\.\d{1,18})?)\s*(?:MON|MONS|MONAD|MONADS|MONT|MONTS)\b/i)?.[1];
+  const batchAmount = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d{1,18})?)\s*(?:MON|MONS|MONAD|MONADS|MONT|MONTS)\s+(?:to\s+each(?:\s+of)?|each\s+to)\b/i)?.[1];
   const tokenTransfer = prompt.match(/\b(?:send|pay|transfer)\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+(?:token|contract)\s+(0x[0-9a-fA-F]{40})\s+to\s+(0x[0-9a-fA-F]{40})\b/i);
   const swap = prompt.match(/\bswap\s+(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})\s+for\s+([A-Za-z][A-Za-z0-9._-]{0,15})\s+token\s+(0x[0-9a-fA-F]{40})(?:\s+(?:with\s+)?max(?:imum)?\s+(\d+(?:\.\d{1,2})?)%\s+slippage)?/i);
   const escrow = prompt.match(/\bcreate\s+escrow\s+(\d+(?:\.\d{1,18})?)\s+MON\s+for\s+(0x[0-9a-fA-F]{40})\s+with\s+arbiter\s+(0x[0-9a-fA-F]{40})\s+refund\s+after\s+(\d{1,4})\s+hours?\s+terms\s+(.{3,500})$/i);

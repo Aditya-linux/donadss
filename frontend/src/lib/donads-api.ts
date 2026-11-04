@@ -340,7 +340,7 @@ function isFailedTask(task: Task): task is FailedTask {
 }
 
 const API_URL =
-  process.env.NEXT_PUBLIC_DONADS_API_URL ?? "http://127.0.0.1:8080";
+  process.env.NEXT_PUBLIC_DONADS_API_URL ?? "/api";
 
 let accessToken: string | null = null;
 

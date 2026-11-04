@@ -58,7 +58,7 @@ describe("Operator routines API", () => {
       }),
     ).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1/tasks/task-1/routine",
+      "/api/v1/tasks/task-1/routine",
       expect.objectContaining({ method: "POST" }),
     );
   });
@@ -75,7 +75,7 @@ describe("Operator routines API", () => {
 
     await expect(runOperatorRoutine("research draft")).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1/routines/research%20draft/runs",
+      "/api/v1/routines/research%20draft/runs",
       expect.objectContaining({ method: "POST" }),
     );
   });

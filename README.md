@@ -60,16 +60,16 @@ Commerce adds merchant evidence around the payment: verified offer → exact use
 - Wallet-scoped task history is available through `GET /v1/tasks` and appears in the recent-task sidebar.
 - Sign-in challenges and authenticated sessions are rate limited; API responses include restrictive security headers.
 - Operator child tasks inherit the parent owner; cross-wallet identifiers return `404` without revealing existence.
-- CORS accepts only configured frontend origins. Monad chain ID is revalidated inside the transaction-confirmation path.
+- The browser calls a same-origin `/api/v1` API, eliminating cross-origin deployment configuration. Monad chain ID and exact transfer values are revalidated inside transaction confirmation.
 
-The current in-memory session registry and JSON task stores are appropriate for local/testnet development, not horizontal production. PostgreSQL, an encrypted session store, and a durable queue are required before multi-instance deployment.
+The Vercel deployment stores challenges, sessions, tasks, profiles, routines, and rate limits in Postgres. Operator runs through Vercel Workflows so execution can resume across function restarts and deployments.
 
 ## Architecture
 
-- `frontend/`: Next.js interface, wallet sign-in, specialist workspaces, approval screens, and mascot motion.
-- `crates/donads-dispatch/`: Axum API, authentication, ownership, routing, persistence, and background orchestration.
-- `crates/bot-*`: bounded Scout, Commerce, Growth, Flow, Operator, and Sentinel implementations.
-- `crates/donads-core/`: shared task model and verified Monad RPC client.
+- `frontend/`: the single Vercel project containing the Next.js interface and same-origin API.
+- `frontend/src/server/`: Postgres persistence, EIP-191 authentication, specialist execution, policy checks, rate limits, and Monad receipt verification.
+- `frontend/src/workflows/`: durable Vercel Operator workflows and parallel dependency waves.
+- `crates/`: the tested Rust reference implementation and local conformance/acceptance runner.
 - `contracts/`: policy-vault contract and Solidity tests.
 
 Operator executes dependency waves in parallel. Saved routines create a fresh reviewable run; they never reuse a signature or silently repeat a purchase.
@@ -87,47 +87,41 @@ The current local/testnet build requires **no paid API key**. It uses the public
 | Monad reads and receipt verification | Public `MONAD_RPC_URL`; no key | Dedicated authenticated Monad RPC endpoint with quotas and failover |
 | Wallet authentication and payments | User-controlled EVM wallet; no application key | Same non-custodial model, plus audited policy-vault address for bounded automation |
 | PDF reports | No key | No key unless reports are later archived to external storage |
-| Public web deployment | Vercel and persistent-backend accounts | Deployment tokens belong in each platform's secret store, never the repository |
+| Public web deployment | One Vercel project and a Marketplace Postgres integration | Deployment/database credentials are injected by Vercel and never committed |
 | Real product orders | Not configured | Documented crypto merchant API URL/token and webhook verification secret |
 | Model-backed generation | Not configured | One approved LLM provider key, budgets, redaction, fallback, and evaluation suite |
 | Web-wide search | Not configured; Scout reads supplied URLs | Approved search API key plus citation and source-quality controls |
 | Connected applications | Not configured | Per-connector OAuth client ID/secret and encrypted, revocable user tokens |
-| Multi-instance durability | Not required for single-instance preview | PostgreSQL connection, encrypted Redis/session store, and durable job queue |
+| Multi-instance durability | Marketplace Postgres and Vercel Workflows | Retention, backups, connection quotas, and disaster-recovery testing |
 | Monitoring | Local logs | Error-monitoring DSN, metrics, alerting, and privacy-safe audit retention |
 
 Do not add unused provider secrets. Select a provider only when its connector is implemented and tested; use separate testnet and production credentials with the minimum permissions.
 
 ## Local setup
 
-Requirements: current stable Rust, Node.js, npm, and an EVM browser wallet configured for Monad Testnet.
-
-```powershell
-Copy-Item .env.example .env
-cargo run -p donads-dispatch
-```
-
-In another terminal:
+Requirements: Node.js, npm, a Postgres connection string, and an EVM browser wallet configured for Monad Testnet. Rust is optional unless running the reference implementation tests.
 
 ```powershell
 Set-Location frontend
+Copy-Item .env.example .env.local
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`, select **Sign in**, and approve the message signature. This signature is free and cannot move funds. The API binds to `127.0.0.1:8080` by default.
+Set `DATABASE_URL` in `frontend/.env.local`, open `http://localhost:3000`, select **Sign in**, and approve the message signature. This signature is free and cannot move funds. The UI and API share the same local origin.
 
 Configuration is documented in `.env.example`. Production credentials must use a secret manager/KMS reference; never commit wallet keys, browser profiles, OAuth tokens, or merchant credentials.
 
-## Public testnet preview
+## Public testnet deployment
 
-The web interface and dispatcher are deployed separately:
+DONADS deploys as one Vercel project rooted at `frontend/`:
 
-- Deploy `frontend/` to Vercel with `NEXT_PUBLIC_DONADS_API_URL` set to the public HTTPS dispatcher URL.
-- Deploy the repository-root `Dockerfile` to a persistent container service. Attach a volume at `/app/data`; the current preview stores tasks, profiles, and routines there.
-- Configure the dispatcher with `DONADS_AUTH_DOMAIN`, `DONADS_AUTH_URI`, and `DONADS_ALLOWED_ORIGINS` matching the exact Vercel hostname. Keep `DONADS_NETWORK=testnet` and `MONAD_RPC_URL=https://testnet-rpc.monad.xyz`.
-- Use the service health check `GET /v1/health`. Never expose a private key as a deployment variable.
-
-Vercel alone is not sufficient for the current backend: the dispatcher is a long-running Axum service and its preview persistence requires a mounted volume. The JSON stores and in-memory sessions remain single-instance preview infrastructure, not production infrastructure.
+- `/` serves the Next.js product interface.
+- `/api/v1/*` serves authentication, tasks, history, profiles, payments, receipts, and specialist APIs.
+- `/.well-known/workflow/*` is managed by Vercel for durable Operator execution.
+- A Neon or equivalent Postgres integration is provisioned from the Vercel Marketplace and injects `DATABASE_URL`.
+- `MONAD_RPC_URL` defaults to the public Monad Testnet endpoint; production should use a dedicated authenticated endpoint.
+- `GET /api/v1/health` is the deployment health check. No private key is configured anywhere.
 
 To test a real transfer, connect a dedicated user-controlled wallet, select Monad Testnet (chain ID `10143`), fund that wallet with test MON from the official faucet, and submit a Flow task. The wallet address displayed by DONADS is the address to fund. There is no DONADS custody address and no agent private key.
 
@@ -150,9 +144,9 @@ npm audit
 
 Unit-test doubles exist only inside tests. They validate failures and UI behavior and never create product-visible payment or order claims.
 
-### Real local acceptance flow
+### Rust reference acceptance flow
 
-With the dispatcher running, execute:
+With the optional Rust dispatcher running, execute:
 
 ```powershell
 cargo run -p donads-dispatch --example acceptance
@@ -166,8 +160,8 @@ This generates an unfunded ephemeral wallet in memory, signs into the real API, 
 2. Add dropped, replaced, reverted, duplicate, and delayed transaction recovery.
 3. Integrate one authorized merchant that sells physical products and directly accepts supported crypto through a documented checkout API.
 4. Bind merchant invoice, wallet payment, fulfillment, order receipt, refund, and support status into one idempotent workflow.
-5. Replace JSON/in-memory infrastructure with PostgreSQL, Redis or an equivalent encrypted session store, and a durable job queue.
-6. Add distributed edge quotas, monitoring, backups, browser isolation, and encrypted connector credentials.
+5. Add production monitoring, database backups, browser isolation, and encrypted connector credentials.
+6. Load-test Postgres connection quotas, Workflow retries, concurrent users, and RPC failover.
 7. Complete at least 5–10 recorded testnet acceptance tasks, including failure and recovery cases.
 8. Run contract audit, application penetration testing, prompt-injection testing, and load testing before mainnet.
 
